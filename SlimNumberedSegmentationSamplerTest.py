@@ -13,7 +13,7 @@ def run():
     parser.add_argument('--size', '-s', type=int, default=1000, help='sample size')
     parser.add_argument('--data', '-d', required=True, metavar='SUBJECT_FILE', help='gzipped individual subject RT data file (input)')
     parser.add_argument('--cutoff', type=int, help='use only up to the cutoff trial')
-    parser.add_argument('--samplefile', required=True, metavar='SAMPLE_FILE', help='the file path of the resulting sample file (input or output)')
+    parser.add_argument('--samplefile', default=sys.stdout, metavar='SAMPLE_FILE', help='the file path of the resulting sample file (input or output)')
     parser.add_argument('--annealing', default='False', choices=['True', 'False', 'T', 'F'], help='turn on/off simulated annealing (temperature on prior)')
     parser.add_argument('--samplealpha', default='True', choices=['True', 'False', 'T', 'F'], help='turn on/off the sampling of alpha')
     parser.add_argument('--samplebeta', default='True', choices=['True', 'False', 'T', 'F'], help='turn on/off the sampling of beta')
@@ -35,7 +35,7 @@ def run():
             print('Sorry, but the specified sample file', args.samplefile, 'does not exist!', file=sys.stderr)
             sys.exit(0)
     else:
-        if os.path.exists(args.samplefile):
+        if args.samplefile is not sys.stdout and os.path.exists(args.samplefile):
             print('Sorry, but the specified sample file', 
                   args.samplefile, 
                   'already exists! Please manually delete the file before running the sampler.',
@@ -47,7 +47,10 @@ def run():
     if args.mode == 'predict':
         sample_fp = gzip.open(args.samplefile, 'r')
     else:
-        sample_fp = gzip.open(args.samplefile, 'w')
+        if args.samplefile is sys.stdout:
+            sample_fp = args.samplefile
+        else:
+            sample_fp = gzip.open(args.samplefile, 'w')
 
     sampler = SlimNumberedSegmentationSampler(data_file = args.data, 
                                               sample_size = args.size, 

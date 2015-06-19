@@ -24,6 +24,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         self.sample_beta = sample_beta in ['T', 'True', True]
         self.use_context = use_context in ['T', 'True', True]
         self.resample_rate = resample_rate
+        self.ibeta = ibeta
 
         if self.prior_type == 'Poisson':
             # hyperpriors for self.l
@@ -56,6 +57,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                                         size = self.sample_size)
             self.log_weight = np.log(np.ones(self.sample_size) / self.sample_size)
 
+            
     def batch_sample_bundles(self):
         """Perform Gibbs sampling on clusters.
         """
@@ -198,9 +200,9 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             try: cat_count, uniq_cats, new_cat = self.smallest_unused_label(self.categories[:i] + self.categories[i+1:])
             except IndexError: cat_count, uniq_cats, new_cat = self.smallest_unused_label(self.categories[:i])
             # set up grid
-            cat_grid = np.hstack((uniq_cats, new_cat))
+            cat_grid = list(uniq_cats) + [new_cat]
             log_p_grid = np.empty(len(cat_grid))
-
+            
             for cat in cat_grid:
                 cat_index = cat_grid.index(cat)
                 if cat == new_cat:
@@ -218,6 +220,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             #print(lognormalize(log_p_grid), file=sys.stderr)
             #raw_input()
             self.categories[i] = np.random.choice(a = cat_grid, p = lognormalize(log_p_grid))
+            if self.categories[i] == new_cat: self.beta[new_cat] = self.ibeta
 
     def log_length_prior(self, runs=None, length_list=None, c_l=None):
         """Calculate the prior probability of a run, based on
@@ -290,7 +293,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                     print('Iteration:', self.iteration, self.beta, file=sys.stderr)
                     if self.sample_output_file != sys.stdout: self.sample_output_file.flush()
 
-                #self.set_temperature()
+                self.set_temperature()
                 self.batch_sample_bundles()
                 self.batch_sample_l()
                 self.batch_sample_categories()
@@ -355,13 +358,12 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         for i in xrange(len(self.bundles)):
             try: cat_seq.extend([self.categories[i]] * (self.bundles[i+1] - self.bundles[i]))
             except IndexError: cat_seq.extend([self.categories[i]] * (self.N - self.bundles[i]))
-        #print(cat_seq)
-        output += ','.join([str(c) for c in self.reorder_labels(cat_seq)])
+        output += ','.join([str(c) for c in cat_seq])
         print(output, file = dest)
 
     def reorder_labels(self, labels):
         labels = np.array(labels)
-        cur_labels = uniqify(labels[np.where(labels > 0)])
+        cur_labels = list(set(labels[np.where(labels > 0)]))
         new_labels = range(1,len(cur_labels) + 1)
         labels_copy = copy.deepcopy(labels)
         for i in xrange(len(cur_labels)):
