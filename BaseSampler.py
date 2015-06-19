@@ -69,7 +69,7 @@ class BaseSampler:
         self.iteration = 0
         self.sample_size = sample_size
         #self.data.insert(0,None)
-        self.total_trial = len(self.data)
+        self.N = len(self.data)
         self.sample_output_file = sample_output_file
         self.annealing = annealing in ['True', 'T', True]
 
@@ -114,13 +114,13 @@ class BaseSampler:
                 self.temp = 1.0
 
         elif self.s_type == 'increm':
-            if self.iteration < self.total_trial * 0.2:
+            if self.iteration < self.N * 0.2:
                 self.temp = 0.2
-            elif self.iteration < self.total_trial * 0.3:
+            elif self.iteration < self.N * 0.3:
                 self.temp = 0.4
-            elif self.iteration < self.total_trial * 0.4:
+            elif self.iteration < self.N * 0.4:
                 self.temp = 0.6
-            elif self.iteration < self.total_trial * 0.5:
+            elif self.iteration < self.N * 0.5:
                 self.temp = 0.8
             else:
                 self.temp = 1.0
