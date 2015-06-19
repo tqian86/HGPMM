@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from __future__ import print_function
+from __future__ import print_function, division
 import sys, csv, gzip, random, copy, math, bisect
 import numpy as np
 
@@ -25,19 +25,6 @@ def sample(samples, prob):
         if total > r:
             return samples[i]
     raise Exception('distribution not normalized')
-
-def uniqify(seq, idfun=None): 
-    # order preserving
-    if idfun is None:
-        def idfun(x): return x
-    seen = {}
-    result = []
-    for item in seq:
-        marker = idfun(item)
-        if marker in seen: continue
-        seen[marker] = 1
-        result.append(item)
-    return result
 
 def thin_list(lst):
     thin_lst = []
@@ -146,11 +133,6 @@ class BaseSampler:
         except IndexError: new_label = max(int_labels) + 1
         uniq_labels = np.unique(int_labels)
         return label_count, uniq_labels, new_label
-
-        #int_labels = set(int_labels)
-        #all_labels = set(xrange(1, max(int_labels) + 2))
-        #return list(int_labels), min(all_labels - int_labels)        
-
 
 if __name__ == '__main__':
     
