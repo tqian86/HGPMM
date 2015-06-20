@@ -63,11 +63,10 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         """
         # we index the sequence of observations using "nth"
         for nth in xrange(1, self.N):
-            original_cat = None
+            cat_dict = self.get_category_flat_dict()
+            right_run_cat = None
             if nth in self.bundles:
-                existing = True
                 original_idx = self.bundles.index(nth)
-                original_cat = self.categories[original_idx]
 
                 # get the left run
                 left_run_cat = self.categories[original_idx-1]
@@ -75,7 +74,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 left_run = self.data[self.bundles[original_idx-1]:self.bundles[original_idx]]
 
                 # get the right run
-                right_run_beta = self.beta[original_cat]
+                right_run_cat = self.categories[original_idx]
+                right_run_beta = self.beta[right_run_cat]
                 try: right_run = self.data[self.bundles[original_idx]:self.bundles[original_idx+1]]
                 except: right_run = self.data[self.bundles[original_idx]:]
                 
@@ -84,10 +84,11 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 # remove
                 del self.bundles[original_idx]
                 del self.categories[original_idx]
-                if self.categories.count(original_cat) == 0:
-                    del self.beta[original_cat]
+                if self.categories.count(right_run_cat) == 0:
+                    del self.beta[right_run_cat]
             else:
-                left_run_beta = self.beta[self.categories[bisect.bisect(self.bundles, nth)-1]]
+                left_run_cat = self.categories[bisect.bisect(self.bundles, nth)-1]
+                left_run_beta = self.beta[left_run_cat]
                 right_run_beta = left_run_beta
                 together_beta = left_run_beta
 
@@ -108,9 +109,15 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                              self.log_length_prior(runs = [right_run])[0]) * self.temp
             
             # compute the likelihood of each case
-            log_p_grid[0] += self.log_joint_prob(obs = left_run + right_run, beta = together_beta)
-            log_p_grid[1] += self.log_joint_prob(obs = left_run, beta = left_run_beta) + \
-                self.log_joint_prob(obs = right_run, beta = right_run_beta)
+            log_p_grid[0] += self.log_cond_prob(obs = left_run + right_run, cat = left_run_cat,
+                                                cat_dict = cat_dict, beta = together_beta)
+            log_p_grid[1] += self.log_cond_prob(left_run, left_run_cat, cat_dict, left_run_beta) + \
+                             self.log_cond_prob(right_run, right_run_cat, cat_dict, right_run_beta, avoid_cat = left_run_cat)
+                                                
+
+            #log_p_grid[0] += self.log_joint_prob(obs = left_run + right_run, beta = together_beta)
+            #log_p_grid[1] += self.log_joint_prob(obs = left_run, beta = left_run_beta) + \
+            #    self.log_joint_prob(obs = right_run, beta = right_run_beta)
             
             #print(left_run_beta, right_run_beta, together_beta)
             #print(lognormalize(log_p_grid))
@@ -122,9 +129,9 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 # insert the new bundle
                 bisect.insort(self.bundles, nth)
                 # assign category 
-                if original_cat:
-                    self.categories.insert(original_idx, original_cat)
-                    if original_cat not in self.beta: self.beta[original_cat] = right_run_beta
+                if right_run_cat:
+                    self.categories.insert(original_idx, right_run_cat)
+                    if right_run_cat not in self.beta: self.beta[right_run_cat] = right_run_beta
                 else:
                     self.categories.insert(self.bundles.index(nth), self.categories[self.bundles.index(nth)-1])
                     # since we copied the category of the left run, its associated beta is already in self.beta
@@ -187,7 +194,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
     def batch_sample_categories(self):
         """Perform Gibbs sampling on the category of each bundle.
         """
-        
         bundle_count = len(self.bundles)
         for i in xrange(bundle_count):
             # get all the observations in this bundle
@@ -211,14 +217,13 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 else:
                     log_crp_prior = np.log(cat_count[cat] / (bundle_count - 1 + self.alpha))
                     log_likelihood = 0
-                    for obs in bundle_obs:
-                        log_likelihood += np.log((cat_dict[cat].count(obs) + self.beta[cat]) / (len(cat_dict[cat]) + self.support_size * self.beta[cat]))
+                    for y in self.support:
+                        y_count = bundle_obs.count(y)
+                        log_likelihood += y_count * np.log((cat_dict[cat].count(y) + self.beta[cat]) / (len(cat_dict[cat]) + self.support_size * self.beta[cat]))
                 
                 log_p_grid[cat_index] = log_crp_prior + log_likelihood
             
-            #print(cat_grid, file=sys.stderr)
-            #print(lognormalize(log_p_grid), file=sys.stderr)
-            #raw_input()
+            # sample new categories
             self.categories[i] = np.random.choice(a = cat_grid, p = lognormalize(log_p_grid))
             if self.categories[i] == new_cat: self.beta[new_cat] = self.ibeta
 
@@ -244,6 +249,35 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         log_p = math.lgamma(beta * self.support_size) - math.lgamma(beta * self.support_size + len(obs)) 
         for y in self.support:
             log_p += math.lgamma(obs.count(y) + beta) - math.lgamma(beta)
+        return log_p
+
+    def log_cond_prob(self, obs, cat, cat_dict, beta, avoid_cat = None):
+        """Calculate the conditional probability of observations given category and beta.
+        """
+        log_p = 0
+        if cat is not None:
+            for y in self.support:
+                y_count = obs.count(y)
+                log_p += y_count * np.log((cat_dict[cat].count(y) + beta) / (len(cat_dict[cat]) + self.support_size * beta))
+        else:
+            p = 0
+            for c in cat_dict.keys():
+                if c == avoid_cat: continue
+                log_prior = np.log(self.categories.count(c) / (len(self.categories) + self.alpha))
+                log_lik = 0
+                for y in self.support:
+                    y_count = obs.count(y)
+                    log_lik += y_count * np.log((cat_dict[c].count(y) + self.beta[c]) / (len(cat_dict[c]) + self.support_size * self.beta[c]))
+                p += np.exp(log_prior + log_lik)
+            # new category    
+            log_prior = np.log(self.alpha / (len(self.categories) + self.alpha))
+            log_lik = 0
+            for y in self.support:
+                y_count = obs.count(y)
+                log_lik += y_count * np.log(1 / self.support_size)
+            p += np.exp(log_prior + log_lik)
+            if p > 0: log_p += np.log(p)
+            
         return log_p
 
     def get_surround_runs(self, bps, target_bp, data=None):
@@ -290,7 +324,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             for i in xrange(self.sample_size):
                 self.iteration = i + 1
                 if self.iteration % 50 == 0:
-                    print('Iteration:', self.iteration, self.beta, file=sys.stderr)
                     if self.sample_output_file != sys.stdout: self.sample_output_file.flush()
 
                 self.set_temperature()
@@ -298,11 +331,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 self.batch_sample_l()
                 self.batch_sample_categories()
                 if self.sample_beta: self.batch_sample_beta()
-                #print('l:', self.l, file=sys.stderr)
-                #print('bundles:', self.bundles, file=sys.stderr)
-                #print('beta:', self.beta, file=sys.stderr)
-                #print('categories:', self.categories, file=sys.stderr)
-                #raw_input()
+                # record the results
                 self.print_batch_iteration(dest = self.sample_output_file)
 
         if self.sample_output_file != sys.stdout: self.sample_output_file.close()
