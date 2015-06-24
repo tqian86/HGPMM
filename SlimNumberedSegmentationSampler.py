@@ -116,7 +116,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 if original_idx == len(self.bundles) - 1: next_run_cat = None
                 else: next_run_cat = self.categories[original_idx + 1]
                 log_p_grid[0] += self.log_cond_prob(obs = left_run + right_run, cat = None,
-                                                    cat_dict = cat_dict, beta = together_beta)#, avoid_cat = next_run_cat)
+                                                    cat_dict = cat_dict, beta = together_beta, avoid_cat = next_run_cat)
             else:
                 log_p_grid[0] += self.log_cond_prob(obs = left_run + right_run, cat = left_run_cat,
                                                     cat_dict = cat_dict, beta = together_beta)
@@ -124,11 +124,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             log_p_grid[1] += self.log_cond_prob(left_run, left_run_cat, cat_dict, left_run_beta) + \
                              self.log_cond_prob(right_run, right_run_cat, cat_dict, right_run_beta, avoid_cat = left_run_cat)
                                                 
-
-            #log_p_grid[0] += self.log_joint_prob(obs = left_run + right_run, beta = together_beta)
-            #log_p_grid[1] += self.log_joint_prob(obs = left_run, beta = left_run_beta) + \
-            #    self.log_joint_prob(obs = right_run, beta = right_run_beta)
-            
             outcome = np.random.choice(a = grid, p = lognormalize(log_p_grid))
 
             if outcome == 1:
