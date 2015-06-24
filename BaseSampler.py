@@ -55,7 +55,7 @@ def log_dnbinom(y, alpha, beta):
 
 class BaseSampler:
 
-    def __init__(self, data_file, sample_size=5000, cutoff=None, annealing=True, sample_output_file=sys.stdout):
+    def __init__(self, data_file, cl_mode, cl_device=None, sample_size=5000, cutoff=None, annealing=False, record_best=True, sample_output_file=sys.stdout):
         
         self.data = []
         self._import_data(data_file)
@@ -72,6 +72,10 @@ class BaseSampler:
         self.N = len(self.data)
         self.sample_output_file = sample_output_file
         self.annealing = annealing in ['True', 'T', True]
+        self.best_sample = (None, None) # (sample, loglikelihood)
+        self.record_best = record_best
+        self.best_diff = []
+        self.no_improv = 0
 
     def _import_data(self, data_file):
 
@@ -134,6 +138,42 @@ class BaseSampler:
         uniq_labels = np.unique(int_labels)
         return label_count, uniq_labels, new_label
 
+    def auto_save_sample(self, sample):
+        """Save the given sample as the best sample if it yields
+        a larger log-likelihood of data than the current best.
+        """
+        new_logprob = self._logprob(sample)
+        # if there's no best sample recorded yet
+        if self.best_sample[0] is None and self.best_sample[1] is None:
+            self.best_sample = (sample, new_logprob)
+            print('Initial sample generated, loglik: {0}'.format(new_logprob), file=sys.stderr)
+            return
+
+        # if there's a best sample
+        if new_logprob > self.best_sample[1]:
+            self.no_improv = 0
+            self.best_diff.append(new_logprob - self.best_sample[1])
+            self.best_sample = (copy.deepcopy(sample), new_logprob)
+            print('New best sample found, loglik: {0}'.format(new_logprob), file=sys.stderr)
+            return True
+        else:
+            self.no_improv += 1
+            return False
+
+    def no_improvement(self, threshold=500):
+        if len(self.best_diff) == 0: return False
+        if self.no_improv > threshold or np.mean(self.best_diff[-threshold:]) < .1:
+            print('Too little improvement in loglikelihood - Abort searching', file=sys.stderr)
+            return True
+        return False
+
+    def _logprob(self, sample):
+        """Compute the logliklihood of data given a sample. This method
+        does nothing in the base class.
+        """
+        return
+
+    
 if __name__ == '__main__':
     
     filename = sys.argv[1]

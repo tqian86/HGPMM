@@ -330,6 +330,27 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             except KeyError: cat_flat_dict[categories[i]] = run
         return cat_flat_dict
 
+    def _logprob(self, sample):
+        """Calculate the joint probability of an HGPMM model structure and 
+        data.
+        """
+        bundles, categories, l = sample
+
+        for i in xrange(len(bundles)):
+                        
+            if i == len(bundles) - 1:
+                bundle_length = len(self.data) - bundles[i]
+            else:
+                bundle_length = bundles[i+1] - bundles[i]
+
+            # calculate the length prior
+            if self.prior_type == 'Poisson':
+                length_prior_p = logpmf(bundle_length, l)
+            else:
+                length_prior_p = (bundle_length - 1) * np.log(1 - l) + np.log(l)
+                
+            
+    
     def run(self):
         """Run the sampler.
         """
