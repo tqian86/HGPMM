@@ -62,6 +62,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         """Perform Gibbs sampling on clusters.
         """
         # we index the sequence of observations using "nth"
+        _, _, new_cat = self.smallest_unused_label(self.categories)
         for nth in xrange(1, self.N):
             if nth in self.bundles:
                 original_idx = self.bundles.index(nth)
@@ -140,9 +141,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 else:
                     # random intial value - for convenience, just use a new category
                     # which will almost surely will be replaced
-                    _, _, new_cat = self.smallest_unused_label(self.categories)
                     self.categories.insert(self.bundles.index(nth), new_cat)
-                    self.beta[new_cat] = self.ibeta
+                    if new_cat not in self.beta: self.beta[new_cat] = self.ibeta
                     # since we copied the category of the left run, its associated beta is already in self.beta
 
         return
