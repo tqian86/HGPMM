@@ -10,7 +10,7 @@ import bisect
 class SlimNumberedSegmentationSampler(BaseSampler):
 
     def __init__(self, data_file, sample_size, ialpha = .33, ibeta=1, s_type='batch', cutoff=None, annealing=False,
-                 prior_type = 'Geometric', sample_output_file = sys.stdout, resample_rate = 0.33,
+                 prior_type = 'Geometric', sample_output_file = sys.stdout, 
                  sample_alpha = True, sample_beta = True, use_context = False,
                  gamma_prior_shape = 1, gamma_prior_rate = 1,
                  geom_prior_alpha = 1, geom_prior_beta = 1):
@@ -23,7 +23,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         self.sample_alpha = sample_alpha in ['T', 'True', True]
         self.sample_beta = sample_beta in ['T', 'True', True]
         self.use_context = use_context in ['T', 'True', True]
-        self.resample_rate = resample_rate
         self.ibeta = ibeta
 
         if self.prior_type == 'Poisson':
@@ -57,7 +56,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                                         size = self.sample_size)
             self.log_weight = np.log(np.ones(self.sample_size) / self.sample_size)
 
-            
     def batch_sample_bundles(self):
         """Perform Gibbs sampling on clusters.
         """

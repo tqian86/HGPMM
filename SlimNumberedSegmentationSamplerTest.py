@@ -18,7 +18,6 @@ def run():
     parser.add_argument('--samplealpha', default='True', choices=['True', 'False', 'T', 'F'], help='turn on/off the sampling of alpha')
     parser.add_argument('--samplebeta', default='True', choices=['True', 'False', 'T', 'F'], help='turn on/off the sampling of beta')
     parser.add_argument('--usecontext', default='False', choices=['True', 'False', 'T', 'F'], help='turn on/off the use of context')
-    parser.add_argument('--rsth', default=0.33, type=float, help='The threshold under which a localized gibbs will be run')
     parser.add_argument('--priortype', default='Geometric', choices=['Poisson', 'Geometric'], help='prior type on the length of a context')
     parser.add_argument('--alpha', default=1., type=float, help='alpha of CRP')
     parser.add_argument('--gps', default=0.1, type=float, help='gamma prior shape')
@@ -62,7 +61,6 @@ def run():
                                               sample_alpha = args.samplealpha,
                                               sample_beta = args.samplebeta,
                                               use_context = args.usecontext,
-                                              resample_rate = args.rsth,
                                               prior_type = args.priortype,
                                               gamma_prior_shape = args.gps,
                                               gamma_prior_rate = args.gpr,
@@ -73,15 +71,10 @@ def run():
     if args.mode == 'predict':
         sampler.load_samples()
         print('Loading finished.', file=sys.stderr)
+        # add code here to do prediction
     else:
         sampler.run()
         print('Sampling finished. Results are printed to the selected destination.', file=sys.stderr)
     
-    print('Now printing predictions to stdout...', file=sys.stderr)
-    #print('nseg.batch')
-    #for trial in xrange(sampler.total_trial):
-    #    if trial % 10 == 0: print(trial, file=sys.stderr)
-    #    print(sampler.predict(int(trial)))
-
 if __name__ == '__main__':
     run()
