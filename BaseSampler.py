@@ -55,7 +55,7 @@ def log_dnbinom(y, alpha, beta):
 
 class BaseSampler:
 
-    def __init__(self, data_file, cl_mode, cl_device=None, sample_size=5000, cutoff=None, annealing=False, record_best=True, sample_output_file=sys.stdout):
+    def __init__(self, data_file, sample_size=5000, cutoff=None, annealing=False, record_best=True, sample_output_file=sys.stdout):
         
         self.data = []
         self._import_data(data_file)

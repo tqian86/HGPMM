@@ -41,20 +41,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             if self.prior_type == 'Poisson':
                 self.l = np.random.gamma(shape = self.gamma_prior_shape, scale = 1. / self.gamma_prior_rate)
             elif self.prior_type == 'Geometric':
-                self.l = 0.5#np.random.beta(a = self.geom_prior_alpha, b = self.geom_prior_beta)
-
-        elif s_type in ['increm']:
-            self.breakpoints = np.zeros((self.sample_size, self.N), dtype='int8')
-            self.breakpoints[:,0] = 1
-            self.beta = ibeta
-            if self.prior_type == 'Poisson':
-                self.l = np.random.gamma(shape = self.gamma_prior_shape, scale = 1 / (self.gamma_prior_rate),
-                                         size = self.sample_size)
-                self.l[np.where(self.l<1.)] = 1.
-            elif self.prior_type == 'Geometric':
-                self.l = np.random.beta(a = self.geom_prior_alpha, b = self.geom_prior_beta,
-                                        size = self.sample_size)
-            self.log_weight = np.log(np.ones(self.sample_size) / self.sample_size)
+                self.l = np.random.beta(a = self.geom_prior_alpha, b = self.geom_prior_beta)
 
     def batch_sample_bundles(self):
         """Perform Gibbs sampling on clusters.
@@ -244,15 +231,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         elif self.prior_type == 'Geometric':
             return np.array([(run_length - 1) * np.log(1 - c_l) + np.log(c_l) for run_length in length_list])
 
-    def log_joint_prob(self, obs, beta):
-        """Calculate the joint probability of all observations of the same category,
-        which may contain several runs.
-        """
-        log_p = math.lgamma(beta * self.support_size) - math.lgamma(beta * self.support_size + len(obs)) 
-        for y in self.support:
-            log_p += math.lgamma(obs.count(y) + beta) - math.lgamma(beta)
-        return log_p
-
     def log_cond_prob(self, obs, cat, cat_dict, beta = None, avoid_cat = None):
         """Calculate the conditional probability of observations given category and beta.
         """
@@ -332,22 +310,60 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         """Calculate the joint probability of an HGPMM model structure and 
         data.
         """
-        bundles, categories, l = sample
+        bundles, categories, l, alpha, beta = sample
 
+        cat_flat_dict = {}
+        cat_bundle_count = {}
+        N = 0
+        total_logp = 0
         for i in xrange(len(bundles)):
                         
             if i == len(bundles) - 1:
                 bundle_length = len(self.data) - bundles[i]
+                bundle_data = self.data[bundles[i]:]
             else:
                 bundle_length = bundles[i+1] - bundles[i]
+                bundle_data = self.data[bundles[i]:bundles[i+1]]
 
             # calculate the length prior
             if self.prior_type == 'Poisson':
-                length_prior_p = logpmf(bundle_length, l)
+                length_prior_logp = logpmf(bundle_length, l)
             else:
-                length_prior_p = (bundle_length - 1) * np.log(1 - l) + np.log(l)
+                length_prior_logp = (bundle_length - 1) * np.log(1 - l) + np.log(l)
                 
-            
+            # calculate the CPR prior, loglikleihood of data
+            cat = categories[i]
+            loglik = 0
+            if cat in cat_flat_dict:
+                crp_prior_logp = np.log(cat_bundle_count[cat] / (N + alpha))
+
+                # loglik
+                for y in self.support:
+                    y_count = bundle_data.count(y)
+                    loglik += y_count * np.log((cat_flat_dict[cat].count(y) + beta[cat]) / (len(cat_flat_dict[cat]) + self.support_size * beta[cat]))
+                
+                # add this bundle to cluster_dict
+                cat_bundle_count[cat] += 1
+                cat_flat_dict[cat].append(bundle_data)
+                    
+            else:
+                crp_prior_logp = np.log(alpha / (N + alpha))
+
+                # loglik
+                for y in self.support:
+                    y_count = bundle_data.count(y)
+                    loglik += y_count * np.log(1 / self.support_size)
+                
+                # add this category
+                cat_bundle_count[cat] = 1
+                cat_flat_dict[cat] = bundle_data
+
+            # use a simple count to avoid calculating N every time
+            N += 1
+                
+            total_logp += length_prior_logp + crp_prior_logp + loglik
+
+        return total_logp
     
     def run(self):
         """Run the sampler.
@@ -372,45 +388,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 self.print_batch_iteration(dest = self.sample_output_file)
 
         if self.sample_output_file != sys.stdout: self.sample_output_file.close()
-
-    def increm_predict_next_trial(self, next_bp):
-        
-        if next_bp == 0: 
-            print('trial.no', 'pos', 'nseg.pred', 'nseg.pred.se', sep=',', file=sys.stdout)
-            print(next_bp+1, self.data[next_bp], self.beta / (self.beta * self.support_size), 0.0, sep=',', file=sys.stdout)
-            return
-
-        pred_p = np.zeros(self.sample_size)
-        for p in xrange(self.sample_size):
-            left_run, _, left_number, _ = self.get_surround_runs(bps = self.breakpoints[p][:next_bp], target_bp = next_bp, data = self.data[:next_bp])
-            all_runs = self.get_categories(bps = self.breakpoints[p][:next_bp], data = self.data[:next_bp])
-            next_run_numbers = [-1, 0] + all_runs.keys()
-            if left_number is not None: 
-                next_run_numbers.remove(left_number)
-                left_number_count = np.where(self.breakpoints[p] == left_number)[0].size
-            else: left_number_count = 0
-            if self.prior_type == 'Poisson':
-                change_prior = poisson.pmf(len(left_run), self.l[p]) / (1. - poisson.cdf(len(left_run) - 1., self.l[p]))
-                if change_prior == float('Inf'): change_prior = 1.
-            elif self.prior_type == 'Geometric':
-                change_prior = self.l[p]
-            for number in next_run_numbers:
-                if number == 0:
-                    pred_p[p] += (1 - change_prior) * (all_runs[left_number].count(self.data[next_bp]) + self.beta) / (len(all_runs[left_number]) + self.beta * self.support_size)
-                elif number == -1:
-                    pred_p[p] += change_prior * (self.alpha / (self.alpha + np.nonzero(self.breakpoints[p])[0].size - left_number_count)) * \
-                        (self.beta / (self.beta * self.support_size))
-                else:
-                    pred_p[p] += change_prior * \
-                        (np.where(self.breakpoints[p] == number)[0].size / (self.alpha + np.nonzero(self.breakpoints[p])[0].size - left_number_count)) * \
-                        (all_runs[number].count(self.data[next_bp]) + self.beta) / (len(all_runs[number]) + self.beta * self.support_size)
-                #print('bp:', next_bp, self.data[next_bp], 'candidate:', number, file=sys.stderr)
-                #print('total run:', np.nonzero(self.breakpoints[p])[0].size, 'left:', left_number, left_number_count, change_prior, pred_p[p], file=sys.stderr)
-                #raw_input()
-
-        pred_p_point = np.dot(pred_p, lognormalize(self.log_weight))
-        pred_p_se = pred_p.std() / np.sqrt(pred_p.size)
-        print(next_bp+1, self.data[next_bp], pred_p_point.round(decimals=7), pred_p_se.round(decimals=7), sep=',', file=sys.stdout)
 
     def print_batch_iteration(self, dest):
         """Print some debug information.
