@@ -3,7 +3,8 @@
 
 from __future__ import print_function, division
 from BaseSampler import *
-from scipy.stats import poisson
+from scipy.stats import poisson, gamma
+from scipy.stats import beta as beta_dist
 from datetime import datetime
 import bisect
 
@@ -16,7 +17,13 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                  geom_prior_alpha = 1, geom_prior_beta = 1):
         """Initialize the constructor.
         """
-        BaseSampler.__init__(self, data_file, sample_size, cutoff, annealing, sample_output_file)
+        BaseSampler.__init__(self,
+                             data_file = data_file,
+                             sample_size = sample_size,
+                             cutoff = cutoff,
+                             annealing = annealing,
+                             sample_output_file = sample_output_file,
+                             record_best = True)
         # other shared parameters
         self.s_type = s_type
         self.prior_type = prior_type
@@ -315,7 +322,14 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         cat_flat_dict = {}
         cat_bundle_count = {}
         N = 0
-        total_logp = 0
+
+        # calculate the logp of l first
+        if self.prior_type == 'Poisson':
+            l_logp = gamma.logpdf(l, a = self.gamma_prior_shape, scale = 1 / self.gamma_prior_rate)
+        else:
+            l_logp = beta_dist.logpdf(l, a = self.geom_prior_alpha, b = self.geom_prior_beta)
+        total_logp = l_logp
+
         for i in xrange(len(bundles)):
                         
             if i == len(bundles) - 1:
@@ -327,13 +341,15 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
             # calculate the length prior
             if self.prior_type == 'Poisson':
-                length_prior_logp = logpmf(bundle_length, l)
+                length_prior_logp = poisson.logpmf(bundle_length, l)
             else:
                 length_prior_logp = (bundle_length - 1) * np.log(1 - l) + np.log(l)
                 
             # calculate the CPR prior, loglikleihood of data
             cat = categories[i]
             loglik = 0
+
+            # if this is an existing category
             if cat in cat_flat_dict:
                 crp_prior_logp = np.log(cat_bundle_count[cat] / (N + alpha))
 
@@ -345,7 +361,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 # add this bundle to cluster_dict
                 cat_bundle_count[cat] += 1
                 cat_flat_dict[cat].append(bundle_data)
-                    
+
+            # if this is a new category
             else:
                 crp_prior_logp = np.log(alpha / (N + alpha))
 
@@ -353,7 +370,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 for y in self.support:
                     y_count = bundle_data.count(y)
                     loglik += y_count * np.log(1 / self.support_size)
-                
+
                 # add this category
                 cat_bundle_count[cat] = 1
                 cat_flat_dict[cat] = bundle_data
@@ -384,7 +401,17 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 self.batch_sample_l()
                 self.batch_sample_categories()
                 if self.sample_beta: self.batch_sample_beta()
-                # record the results
+
+                if self.record_best:
+                    self.auto_save_sample((self.bundles, self.categories, self.l, self.alpha, self.beta))
+                    if self.no_improvement(200):
+                        break
+                else:
+                    # record the results
+                    self.print_batch_iteration(dest = self.sample_output_file)
+
+            if self.record_best:
+                self.bundles, self.categories, self.l, self.alpha, self.beta = self.best_sample[0]
                 self.print_batch_iteration(dest = self.sample_output_file)
 
         if self.sample_output_file != sys.stdout: self.sample_output_file.close()

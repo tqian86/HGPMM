@@ -55,7 +55,7 @@ def log_dnbinom(y, alpha, beta):
 
 class BaseSampler:
 
-    def __init__(self, data_file, sample_size=5000, cutoff=None, annealing=False, record_best=True, sample_output_file=sys.stdout):
+    def __init__(self, data_file, sample_size=5000, cutoff=None, annealing=False, sample_output_file=sys.stdout, record_best=True,):
         
         self.data = []
         self._import_data(data_file)
@@ -68,7 +68,6 @@ class BaseSampler:
             self.context = self.context[:cutoff]
         self.iteration = 0
         self.sample_size = sample_size
-        #self.data.insert(0,None)
         self.N = len(self.data)
         self.sample_output_file = sample_output_file
         self.annealing = annealing in ['True', 'T', True]
@@ -163,7 +162,7 @@ class BaseSampler:
     def no_improvement(self, threshold=500):
         if len(self.best_diff) == 0: return False
         if self.no_improv > threshold or np.mean(self.best_diff[-threshold:]) < .1:
-            print('Too little improvement in loglikelihood - Abort searching', file=sys.stderr)
+            print('Too little improvement in loglikelihood for %s iterations - Abort searching' % threshold, file=sys.stderr)
             return True
         return False
 
@@ -171,7 +170,7 @@ class BaseSampler:
         """Compute the logliklihood of data given a sample. This method
         does nothing in the base class.
         """
-        return
+        return 0
 
     
 if __name__ == '__main__':
