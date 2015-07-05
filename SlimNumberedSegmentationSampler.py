@@ -10,10 +10,10 @@ import bisect
 
 class SlimNumberedSegmentationSampler(BaseSampler):
 
-    def __init__(self, data_file, sample_size, ialpha = .33, ibeta=1, s_type='batch', cutoff=None, annealing=False,
+    def __init__(self, data_file, sample_size, ialpha = 1, ibeta=1, s_type='batch', cutoff=None, annealing=False,
                  prior_type = 'Geometric', sample_output_file = sys.stdout, 
                  sample_alpha = True, sample_beta = True, use_context = False,
-                 gamma_prior_shape = 1, gamma_prior_rate = 1,
+                 poisson_prior_shape = 1, poisson_prior_rate = 1,
                  geom_prior_alpha = 1, geom_prior_beta = 1):
         """Initialize the constructor.
         """
@@ -23,7 +23,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                              cutoff = cutoff,
                              annealing = annealing,
                              sample_output_file = sample_output_file,
-                             record_best = True)
+                             record_best = False)
         # other shared parameters
         self.s_type = s_type
         self.prior_type = prior_type
@@ -34,8 +34,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
         if self.prior_type == 'Poisson':
             # hyperpriors for self.l
-            self.gamma_prior_shape = gamma_prior_shape
-            self.gamma_prior_rate = gamma_prior_rate
+            self.poisson_prior_shape = poisson_prior_shape
+            self.poisson_prior_rate = poisson_prior_rate
         elif self.prior_type == 'Geometric':
             self.geom_prior_alpha = geom_prior_alpha
             self.geom_prior_beta = geom_prior_beta
@@ -46,10 +46,10 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             self.alpha = ialpha
             self.beta = {1:ibeta}
             if self.prior_type == 'Poisson':
-                self.l = np.random.gamma(shape = self.gamma_prior_shape, scale = 1. / self.gamma_prior_rate)
+                self.l = np.random.gamma(shape = self.poisson_prior_shape, scale = 1. / self.poisson_prior_rate)
             elif self.prior_type == 'Geometric':
                 self.l = np.random.beta(a = self.geom_prior_alpha, b = self.geom_prior_beta)
-
+                
     def batch_sample_bundles(self):
         """Perform Gibbs sampling on clusters.
         """
@@ -180,8 +180,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         
         if self.prior_type == 'Poisson':
             # we want to draw from Gamma(alpha + total_run_length, beta + total_number_of_runs)
-            self.l = np.random.gamma(shape = self.gamma_prior_shape + total_run_length, 
-                                     scale = 1. / (self.gamma_prior_rate + total_number_of_runs))
+            self.l = np.random.gamma(shape = self.poisson_prior_shape + total_run_length, 
+                                     scale = 1. / (self.poisson_prior_rate + total_number_of_runs))
         elif self.prior_type == 'Geometric':
             # Beta(alpha + total_number_of_runs, beta + sum(all_run_lengths) - total_number_of_runs)
             self.l = np.random.beta(a = self.geom_prior_alpha + total_number_of_runs, 
@@ -222,6 +222,27 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             # sample new categories
             self.categories[i] = np.random.choice(a = cat_grid, p = lognormalize(log_p_grid))
             if self.categories[i] == new_cat: self.beta[new_cat] = self.ibeta
+
+        # address the label switching problem to some degree
+        cat_dict = self.get_category_flat_dict()
+        cat_support_count = np.empty(shape = (len(cat_dict.keys()), self.support_size))
+        for cat in cat_dict.iterkeys():
+            cat_idx = cat_dict.keys().index(cat)
+            cat_support_count[cat_idx] = [-1 * cat_dict[cat].count(_) for _ in self.support] # -1 for descending
+        
+        reindex = list(np.lexsort((eval(','.join(['cat_support_count[:,%s]' % _ for _ in xrange(self.support_size - 1, -1, -1)])))))
+        categories_copy = np.array(self.categories)
+        beta_copy = {}
+
+        for cat in cat_dict.iterkeys():
+            cat_idx = cat_dict.keys().index(cat)
+            categories_copy[np.where(self.categories == cat)] = reindex.index(cat_idx) + 1
+            beta_copy[reindex.index(cat_idx) + 1] = self.beta[cat]
+
+        self.categories = list(categories_copy)
+        self.beta = beta_copy
+        return
+
 
     def log_length_prior(self, runs=None, length_list=None, c_l=None):
         """Calculate the prior probability of a run, based on
@@ -325,7 +346,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
         # calculate the logp of l first
         if self.prior_type == 'Poisson':
-            l_logp = gamma.logpdf(l, a = self.gamma_prior_shape, scale = 1 / self.gamma_prior_rate)
+            l_logp = gamma.logpdf(l, a = self.poisson_prior_shape, scale = 1 / self.poisson_prior_rate)
         else:
             l_logp = beta_dist.logpdf(l, a = self.geom_prior_alpha, b = self.geom_prior_beta)
         total_logp = l_logp
@@ -391,6 +412,9 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             header += ','.join([str(t) for t in xrange(1, self.N+1)])
             print(header, file = self.sample_output_file)
 
+            beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '.csv.gz', 'w')
+            print('iteration,category,beta', file=beta_fp)
+            
             for i in xrange(self.sample_size):
                 self.iteration = i + 1
                 if self.iteration % 50 == 0:
@@ -400,6 +424,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 self.batch_sample_bundles()
                 self.batch_sample_l()
                 self.batch_sample_categories()
+                if self.sample_alpha: self.batch_sample_alpha()
                 if self.sample_beta: self.batch_sample_beta()
 
                 if self.record_best:
@@ -408,21 +433,26 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                         break
                 else:
                     # record the results
-                    self.print_batch_iteration(dest = self.sample_output_file)
+                    self.print_samples(iteration = self.iteration, dest = self.sample_output_file)
+                    for cat in np.unique(self.categories):
+                        print(*[self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
 
             if self.record_best:
                 self.bundles, self.categories, self.l, self.alpha, self.beta = self.best_sample[0]
-                self.print_batch_iteration(dest = self.sample_output_file)
+                self.print_samples(iteration = None, dest = self.sample_output_file)
+                for cat in np.unique(self.categories):
+                    print(*[self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
+            beta_fp.close()
 
         if self.sample_output_file != sys.stdout: self.sample_output_file.close()
 
-    def print_batch_iteration(self, dest):
+    def print_samples(self, iteration, dest):
         """Print some debug information.
         """
-        # display beta information
+        # header
         output = str(self.alpha) + ','
-        #output += str(self.beta) + ','
         output += str(self.l) + ','
+
         # display category information
         cat_seq = []
         for i in xrange(len(self.bundles)):
@@ -430,6 +460,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             except IndexError: cat_seq.extend([self.categories[i]] * (self.N - self.bundles[i]))
         output += ','.join([str(c) for c in cat_seq])
         print(output, file = dest)
+
 
     def reorder_labels(self, labels):
         labels = np.array(labels)
