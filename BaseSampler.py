@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 from __future__ import print_function, division
-import sys, csv, gzip, random, copy, math, bisect
+import sys, csv, gzip, random, copy, math, bisect, os.path
 import numpy as np
 
 def printerr(x):
@@ -89,6 +89,11 @@ class BaseSampler:
                                  self._get_context(_, 'n.dinasour')])
                         for _ in self.data]
         self.data = [_['pos'] for _ in self.data]
+
+        self.source_filepath = data_file
+        self.source_dirname = os.path.dirname(data_file) + '/'
+        self.source_filename = os.path.basename(data_file).split('.')[0]
+        
         
     def _get_context(self, row, feature_name):
         if feature_name in row:
