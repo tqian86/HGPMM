@@ -55,7 +55,7 @@ def log_dnbinom(y, alpha, beta):
 
 class BaseSampler:
 
-    def __init__(self, data_file, sample_size=5000, cutoff=None, annealing=False, sample_output_file=sys.stdout, record_best=True,):
+    def __init__(self, data_file, sample_size=5000, cutoff=None, annealing=False, output_to_stdout = False, record_best=True):
         
         self.data = []
         self._import_data(data_file)
@@ -64,12 +64,13 @@ class BaseSampler:
         self.support = np.unique(self.data)
         self.support_size = len(self.support)
         if cutoff:
+            self.cutoff = cutoff
             self.data = self.data[:cutoff]
             self.context = self.context[:cutoff]
         self.iteration = 0
         self.sample_size = sample_size
         self.N = len(self.data)
-        self.sample_output_file = sample_output_file
+        self.output_to_stdout = output_to_stdout
         self.annealing = annealing in ['True', 'T', True]
         self.best_sample = (None, None) # (sample, loglikelihood)
         self.record_best = record_best

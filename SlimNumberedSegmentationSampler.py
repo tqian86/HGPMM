@@ -10,22 +10,21 @@ import bisect
 
 class SlimNumberedSegmentationSampler(BaseSampler):
 
-    def __init__(self, data_file, sample_size, ialpha = 1, ibeta=1, s_type='batch', cutoff=None, annealing=False,
-                 prior_type = 'Geometric', sample_output_file = sys.stdout, 
+    def __init__(self, data_file, sample_size, record_best, ialpha = 1, ibeta=1, cutoff=None, annealing=False,
+                 prior_type = 'Geometric', output_to_stdout = False, 
                  sample_alpha = True, sample_beta = True, use_context = False,
                  poisson_prior_shape = 1, poisson_prior_rate = 1,
                  geom_prior_alpha = 1, geom_prior_beta = 1):
-        """Initialize the constructor.
+        """Initialize the sampler.
         """
         BaseSampler.__init__(self,
                              data_file = data_file,
                              sample_size = sample_size,
                              cutoff = cutoff,
                              annealing = annealing,
-                             sample_output_file = sample_output_file,
-                             record_best = False)
+                             output_to_stdout = output_to_stdout,
+                             record_best = record_best)
         # other shared parameters
-        self.s_type = s_type
         self.prior_type = prior_type
         self.sample_alpha = sample_alpha in ['T', 'True', True]
         self.sample_beta = sample_beta in ['T', 'True', True]
@@ -40,15 +39,14 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             self.geom_prior_alpha = geom_prior_alpha
             self.geom_prior_beta = geom_prior_beta
 
-        if s_type in ['batch']:
-            self.bundles = [0]
-            self.categories = [1]
-            self.alpha = ialpha
-            self.beta = {1:ibeta}
-            if self.prior_type == 'Poisson':
-                self.l = np.random.gamma(shape = self.poisson_prior_shape, scale = 1. / self.poisson_prior_rate)
-            elif self.prior_type == 'Geometric':
-                self.l = np.random.beta(a = self.geom_prior_alpha, b = self.geom_prior_beta)
+        self.bundles = [0]
+        self.categories = [1]
+        self.alpha = ialpha
+        self.beta = {1:ibeta}
+        if self.prior_type == 'Poisson':
+            self.l = np.random.gamma(shape = self.poisson_prior_shape, scale = 1. / self.poisson_prior_rate)
+        elif self.prior_type == 'Geometric':
+            self.l = np.random.beta(a = self.geom_prior_alpha, b = self.geom_prior_beta)
                 
     def batch_sample_bundles(self):
         """Perform Gibbs sampling on clusters.
@@ -406,50 +404,52 @@ class SlimNumberedSegmentationSampler(BaseSampler):
     def run(self):
         """Run the sampler.
         """
-        if self.s_type == 'batch':
-            #header = 'alpha,beta,l,'
-            header = 'alpha,l,'
-            header += ','.join([str(t) for t in xrange(1, self.N+1)])
-            print(header, file = self.sample_output_file)
+        beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '-co%d.csv.gz' % self.cutoff, 'w')
+        sample_fp = gzip.open(self.source_dirname + 'bundle-samples-' + self.source_filename + '-co%d.csv.gz' % self.cutoff, 'w')
 
-            beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '.csv.gz', 'w')
-            print('iteration,category,beta', file=beta_fp)
-            
-            for i in xrange(self.sample_size):
-                self.iteration = i + 1
-                if self.iteration % 50 == 0:
-                    if self.sample_output_file != sys.stdout: self.sample_output_file.flush()
+        header = 'alpha,l,'
+        header += ','.join([str(t) for t in xrange(1, self.N+1)])
+        print(header, file = sample_fp)
+        if self.output_to_stdout: print(header, file = sys.stdout)
 
-                self.set_temperature()
-                self.batch_sample_bundles()
-                self.batch_sample_l()
-                self.batch_sample_categories()
-                if self.sample_alpha: self.batch_sample_alpha()
-                if self.sample_beta: self.batch_sample_beta()
+        print('cutoff,iteration,category,beta', file=beta_fp)
 
-                if self.record_best:
-                    self.auto_save_sample((self.bundles, self.categories, self.l, self.alpha, self.beta))
-                    if self.no_improvement(200):
-                        break
-                else:
-                    # record the results
-                    self.print_samples(iteration = self.iteration, dest = self.sample_output_file)
-                    for cat in np.unique(self.categories):
-                        print(*[self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
+        # run the sampler
+        for i in xrange(self.sample_size):
+            self.iteration = i + 1
+            self.set_temperature()
+            self.batch_sample_bundles()
+            self.batch_sample_l()
+            self.batch_sample_categories()
+            if self.sample_alpha: self.batch_sample_alpha()
+            if self.sample_beta: self.batch_sample_beta()
 
             if self.record_best:
-                self.bundles, self.categories, self.l, self.alpha, self.beta = self.best_sample[0]
-                self.print_samples(iteration = None, dest = self.sample_output_file)
+                self.auto_save_sample((self.bundles, self.categories, self.l, self.alpha, self.beta))
+                if self.no_improvement():
+                    break
+            else:
+                # record the results for each iteration
+                self.print_samples(iteration = self.iteration, dest = sample_fp)
                 for cat in np.unique(self.categories):
-                    print(*[self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
-            beta_fp.close()
+                    print(*[self.cutoff, self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
 
-        if self.sample_output_file != sys.stdout: self.sample_output_file.close()
+        if self.record_best:
+            self.bundles, self.categories, self.l, self.alpha, self.beta = self.best_sample[0]
+            # save the samples to files
+            self.print_samples(iteration = None, dest = sample_fp)
+            for cat in np.unique(self.categories):
+                print(*[self.cutoff, self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
+
+        # close files
+        beta_fp.close()
+        sample_fp.close()
+
+        return True
 
     def print_samples(self, iteration, dest):
         """Print some debug information.
         """
-        # header
         output = str(self.alpha) + ','
         output += str(self.l) + ','
 
@@ -461,12 +461,5 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         output += ','.join([str(c) for c in cat_seq])
         print(output, file = dest)
 
-
-    def reorder_labels(self, labels):
-        labels = np.array(labels)
-        cur_labels = list(set(labels[np.where(labels > 0)]))
-        new_labels = range(1,len(cur_labels) + 1)
-        labels_copy = copy.deepcopy(labels)
-        for i in xrange(len(cur_labels)):
-            labels_copy[np.where(labels == cur_labels[i])] = new_labels[i]
-        return labels_copy
+        if self.output_to_stdout:
+            print(output, file = sys.stdout)
