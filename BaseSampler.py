@@ -55,7 +55,8 @@ def log_dnbinom(y, alpha, beta):
 
 class BaseSampler:
 
-    def __init__(self, data_file, sample_size=5000, cutoff=None, annealing=False, output_to_stdout = False, record_best=True):
+    def __init__(self, data_file, sample_size=5000, cutoff=None, annealing=False,
+                 output_to_stdout = False, record_best=True, debug_mumble = False):
         
         self.data = []
         self._import_data(data_file)
@@ -63,8 +64,8 @@ class BaseSampler:
 
         self.support = np.unique(self.data)
         self.support_size = len(self.support)
+        self.cutoff = cutoff
         if cutoff:
-            self.cutoff = cutoff
             self.data = self.data[:cutoff]
             self.context = self.context[:cutoff]
         self.iteration = 0
@@ -76,6 +77,7 @@ class BaseSampler:
         self.record_best = record_best
         self.best_diff = []
         self.no_improv = 0
+        self.debug_mumble = debug_mumble
 
     def _import_data(self, data_file):
 
@@ -151,7 +153,7 @@ class BaseSampler:
         # if there's no best sample recorded yet
         if self.best_sample[0] is None and self.best_sample[1] is None:
             self.best_sample = (sample, new_logprob)
-            print('Initial sample generated, loglik: {0}'.format(new_logprob), file=sys.stderr)
+            if self.debug_mumble: print('Initial sample generated, loglik: {0}'.format(new_logprob), file=sys.stderr)
             return
 
         # if there's a best sample
@@ -159,7 +161,7 @@ class BaseSampler:
             self.no_improv = 0
             self.best_diff.append(new_logprob - self.best_sample[1])
             self.best_sample = (copy.deepcopy(sample), new_logprob)
-            print('New best sample found, loglik: {0}'.format(new_logprob), file=sys.stderr)
+            if self.debug_mumble: print('New best sample found, loglik: {0}'.format(new_logprob), file=sys.stderr)
             return True
         else:
             self.no_improv += 1
