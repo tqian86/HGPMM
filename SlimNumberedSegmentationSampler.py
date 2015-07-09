@@ -10,10 +10,10 @@ import bisect
 
 class SlimNumberedSegmentationSampler(BaseSampler):
 
-    def __init__(self, data_file, sample_size, record_best, ialpha = 1, ibeta=1, cutoff=None, annealing=False,
-                 prior_type = 'Geometric', output_to_stdout = False, 
+    def __init__(self, data_file, sample_size, ialpha = 1, ibeta=1, cutoff=None, annealing=False,
+                 output_to_stdout = False, record_best = False, debug_mumble = False,
                  sample_alpha = True, sample_beta = True, use_context = False,
-                 poisson_prior_shape = 1, poisson_prior_rate = 1,
+                 prior_type = 'Poisson', poisson_prior_shape = 1, poisson_prior_rate = 1,
                  geom_prior_alpha = 1, geom_prior_beta = 1):
         """Initialize the sampler.
         """
@@ -404,8 +404,12 @@ class SlimNumberedSegmentationSampler(BaseSampler):
     def run(self):
         """Run the sampler.
         """
-        beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '-co%d.csv.gz' % self.cutoff, 'w')
-        sample_fp = gzip.open(self.source_dirname + 'bundle-samples-' + self.source_filename + '-co%d.csv.gz' % self.cutoff, 'w')
+        if self.cutoff:
+            beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '-co%d.csv.gz' % self.cutoff, 'w')
+            sample_fp = gzip.open(self.source_dirname + 'bundle-samples-' + self.source_filename + '-co%d.csv.gz' % self.cutoff, 'w')
+        else:
+            beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '.csv.gz', 'w')
+            sample_fp = gzip.open(self.source_dirname + 'bundle-samples-' + self.source_filename + '.csv.gz', 'w')
 
         header = 'alpha,l,'
         header += ','.join([str(t) for t in xrange(1, self.N+1)])
