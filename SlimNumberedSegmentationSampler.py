@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 from __future__ import print_function, division
@@ -406,13 +405,13 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         """Run the sampler.
         """
         if self.cutoff:
-            beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '-co%d.csv.gz' % self.cutoff, 'w')
-            sample_fp = gzip.open(self.source_dirname + 'bundle-samples-' + self.source_filename + '-co%d.csv.gz' % self.cutoff, 'w')
+            beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '-cutoff%d.csv.gz' % self.cutoff, 'w')
+            sample_fp = gzip.open(self.source_dirname + 'bundle-samples-' + self.source_filename + '-cutoff%d.csv.gz' % self.cutoff, 'w')
         else:
             beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '.csv.gz', 'w')
             sample_fp = gzip.open(self.source_dirname + 'bundle-samples-' + self.source_filename + '.csv.gz', 'w')
 
-        header = 'alpha,l,'
+        header = 'iteration,loglik,alpha,l,'
         header += ','.join([str(t) for t in xrange(1, self.N+1)])
         print(header, file = sample_fp)
         if self.output_to_stdout: print(header, file = sys.stdout)
@@ -430,21 +429,20 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             if self.sample_beta: self.batch_sample_beta()
 
             if self.record_best:
-                self.auto_save_sample((self.bundles, self.categories, self.l, self.alpha, self.beta))
+                if self.auto_save_sample((self.bundles, self.categories, self.l, self.alpha, self.beta)):
+                    # save the samples to files
+                    self.loglik = self.best_sample[1]
+                    self.print_samples(iteration = self.iteration, dest = sample_fp)
+                    for cat in np.unique(self.categories):
+                        print(*[self.cutoff, self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
                 if self.no_improvement():
                     break
             else:
                 # record the results for each iteration
+                self.loglik = self._logprob((self.bundles, self.categories, self.l, self.alpha, self.beta))
                 self.print_samples(iteration = self.iteration, dest = sample_fp)
                 for cat in np.unique(self.categories):
                     print(*[self.cutoff, self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
-
-        if self.record_best:
-            self.bundles, self.categories, self.l, self.alpha, self.beta = self.best_sample[0]
-            # save the samples to files
-            self.print_samples(iteration = None, dest = sample_fp)
-            for cat in np.unique(self.categories):
-                print(*[self.cutoff, self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
 
         # close files
         beta_fp.close()
@@ -455,8 +453,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
     def print_samples(self, iteration, dest):
         """Print some debug information.
         """
-        output = str(self.alpha) + ','
-        output += str(self.l) + ','
+        output = '{0},{1},{2},{3},'.format(iteration, self.loglik, self.alpha, self.l)
 
         # display category information
         cat_seq = []
