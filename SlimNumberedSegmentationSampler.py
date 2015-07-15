@@ -23,7 +23,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                              cutoff = cutoff,
                              annealing = annealing,
                              output_to_stdout = output_to_stdout,
-                             record_best = record_best)
+                             record_best = record_best,
+                             debug_mumble = debug_mumble)
         # other shared parameters
         self.prior_type = prior_type
         self.sample_alpha = sample_alpha in ['T', 'True', True]
