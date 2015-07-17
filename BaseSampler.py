@@ -14,17 +14,21 @@ def lognormalize(x):
     a = np.log(np.sum([np.exp(e) for e in x]))
     return np.exp(x - a)
 
-def sample(samples, prob):
+def sample(a, p):
     """Step sample from a discrete distribution using CDF
     """
-    n = len(samples)
-    r = random.random() # range: [0,1)
+    if (len(a) != len(p)):
+        raise Exception('a != p')
+    p = np.array(p)
+    p = p / p.sum()
+    r = random.random()
+    n = len(a)
     total = 0           # range: [0,1]
     for i in xrange(n):
-        total += prob[i]
+        total += p[i]
         if total > r:
-            return samples[i]
-    raise Exception('distribution not normalized')
+            return a[i]
+    return a[i]
 
 def thin_list(lst):
     thin_lst = []
@@ -78,7 +82,8 @@ class BaseSampler:
         self.best_diff = []
         self.no_improv = 0
         self.debug_mumble = debug_mumble
-
+        self.total_time = 0
+        
     def _import_data(self, data_file):
 
         with gzip.open(data_file) as csvfile:

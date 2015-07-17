@@ -4,7 +4,8 @@ from __future__ import print_function, division
 from BaseSampler import *
 from scipy.stats import poisson, gamma
 from scipy.stats import beta as beta_dist
-from datetime import datetime
+from time import time
+from collections import Counter
 import bisect
 
 class SlimNumberedSegmentationSampler(BaseSampler):
@@ -90,31 +91,37 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
                 # get the left and right runs of a breakpoint
                 left_run, right_run = self.get_surround_runs(bps = self.bundles, target_bp = nth)
-
                 
             # set up the grid
             grid = [0, 1]
-            log_p_grid = [0.] * len(grid)
+            log_p_grid = np.empty(len(grid))
 
+            # pre-count
+            cat_count_dict = {}
+            for c in cat_dict.keys():
+                cat_count_dict[c] = Counter(cat_dict[c])
+
+            a_time = time()
             # compute the prior probability of each run
-            log_p_grid[0] = self.log_length_prior(runs = [left_run + right_run])[0] * self.temp
-            log_p_grid[1] = (self.log_length_prior(runs = [left_run])[0] + \
-                             self.log_length_prior(runs = [right_run])[0]) * self.temp
+            log_p_grid[1] = self.log_length_prior(runs = [left_run, right_run]).sum() * self.temp
+            log_p_grid[0] = self.log_length_prior(runs = [left_run + right_run]).sum() * self.temp
             
             # compute the likelihood of each case
             if nth in self.bundles:
                 if original_idx == len(self.bundles) - 1: next_run_cat = None
                 else: next_run_cat = self.categories[original_idx + 1]
                 log_p_grid[0] += self.log_cond_prob(obs = left_run + right_run, cat = None,
-                                                    cat_dict = cat_dict, beta = together_beta, avoid_cat = next_run_cat)
+                                                    cat_dict = cat_dict, cat_count_dict = cat_count_dict,
+                                                    beta = together_beta, avoid_cat = next_run_cat)
             else:
                 log_p_grid[0] += self.log_cond_prob(obs = left_run + right_run, cat = left_run_cat,
-                                                    cat_dict = cat_dict, beta = together_beta)
+                                                    cat_dict = cat_dict, cat_count_dict = cat_count_dict, beta = together_beta)
                 
-            log_p_grid[1] += self.log_cond_prob(left_run, left_run_cat, cat_dict, left_run_beta) + \
-                             self.log_cond_prob(right_run, right_run_cat, cat_dict, right_run_beta, avoid_cat = left_run_cat)
+            log_p_grid[1] += self.log_cond_prob(left_run, left_run_cat, cat_dict, cat_count_dict, left_run_beta) + \
+                             self.log_cond_prob(right_run, right_run_cat, cat_dict, cat_count_dict, right_run_beta, avoid_cat = left_run_cat)
                                                 
-            outcome = np.random.choice(a = grid, p = lognormalize(log_p_grid))
+            outcome = sample(a = grid, p = lognormalize(log_p_grid))
+            self.total_time += time() - a_time
 
             if outcome == 1:
                 # insert the new bundle
@@ -153,7 +160,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 - math.lgamma(self.support_size * old_beta + len(cat_dict[cat]))
             log_g_new += math.lgamma(self.support_size * new_beta) \
                 - math.lgamma(self.support_size * new_beta + len(cat_dict[cat]))
-            
+
             for y in self.support:
                 log_g_old += math.lgamma(cat_dict[cat].count(y) + old_beta) - math.lgamma(old_beta)
                 log_g_new += math.lgamma(cat_dict[cat].count(y) + new_beta) - math.lgamma(new_beta)
@@ -251,25 +258,29 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             raise NameError('No length or run specified')
 
         if runs is not None: length_list = [len(_) for _ in runs]
+
         # length-based prior
         if self.prior_type == 'Poisson':
             return poisson.logpmf(length_list, c_l)
         elif self.prior_type == 'Geometric':
             return np.array([(run_length - 1) * np.log(1 - c_l) + np.log(c_l) for run_length in length_list])
 
-    def log_cond_prob(self, obs, cat, cat_dict, beta = None, avoid_cat = None):
+    def log_cond_prob(self, obs, cat, cat_dict, cat_count_dict, beta = None, avoid_cat = None):
         """Calculate the conditional probability of observations given category and beta.
         """
+        obs_counter = Counter(obs)
+        categories_counter = Counter(self.categories)
+            
         log_p = 0
         if cat is not None:
-            if cat in cat_dict:
-                for y in self.support:
-                    y_count = obs.count(y)
-                    log_p += y_count * np.log((cat_dict[cat].count(y) + beta) / (len(cat_dict[cat]) + self.support_size * beta))
-            else:
-                for y in self.support:
-                    y_count = obs.count(y)
-                    log_p += y_count * np.log(1 / self.support_size)
+            try: cat_N = len(cat_dict[cat])
+            except KeyError: cat_N = 0
+            for y in self.support:
+                try: cat_n = cat_count_dict[cat][y]
+                except KeyError: cat_n = 0
+                try: y_count = obs_counter[y]
+                except KeyError: y_count = 0
+                log_p += y_count * np.log((cat_n + beta) / (cat_N + self.support_size * beta))
         else:
             
             # If cat is None, then marginalize over all possible categories
@@ -278,18 +289,24 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             p = 0
             for c in cat_dict.keys():
                 if c == avoid_cat: continue
-                log_prior = np.log(self.categories.count(c) / (len(self.categories) + self.alpha))
+                try: cat_N = len(cat_dict[c])
+                except KeyError: cat_N = 0
+                log_prior = np.log(categories_counter[c] / (len(self.categories) + self.alpha))
                 log_lik = 0
                 for y in self.support:
-                    y_count = obs.count(y)
-                    log_lik += y_count * np.log((cat_dict[c].count(y) + self.beta[c]) / (len(cat_dict[c]) + self.support_size * self.beta[c]))
+                    try: cat_n = cat_count_dict[cat][y]
+                    except KeyError: cat_n = 0
+                    try: y_count = obs_counter[y]
+                    except KeyError: y_count = 0
+                    log_lik += y_count * np.log((cat_n + self.beta[c]) / (cat_N + self.support_size * self.beta[c]))
                 p += np.exp(log_prior + log_lik)
                 
             # new category    
             log_prior = np.log(self.alpha / (len(self.categories) + self.alpha))
             log_lik = 0
             for y in self.support:
-                y_count = obs.count(y)
+                try: y_count = obs_counter[y]
+                except KeyError: y_count = 0
                 log_lik += y_count * np.log(1 / self.support_size)
             p += np.exp(log_prior + log_lik)
 
@@ -357,7 +374,9 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             else:
                 bundle_length = bundles[i+1] - bundles[i]
                 bundle_data = self.data[bundles[i]:bundles[i+1]]
-
+                
+            bundle_counter = Counter(bundle_data)
+                
             # calculate the length prior
             if self.prior_type == 'Poisson':
                 length_prior_logp = poisson.logpmf(bundle_length, l)
@@ -374,7 +393,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
                 # loglik
                 for y in self.support:
-                    y_count = bundle_data.count(y)
+                    try: y_count = bundle_counter[y]
+                    except KeyError: y_count = 0
                     loglik += y_count * np.log((cat_flat_dict[cat].count(y) + beta[cat]) / (len(cat_flat_dict[cat]) + self.support_size * beta[cat]))
                 
                 # add this bundle to cluster_dict
@@ -387,7 +407,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
                 # loglik
                 for y in self.support:
-                    y_count = bundle_data.count(y)
+                    try: y_count = bundle_counter[y]
+                    except KeyError: y_count = 0
                     loglik += y_count * np.log(1 / self.support_size)
 
                 # add this category
@@ -448,7 +469,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         beta_fp.close()
         sample_fp.close()
 
-        return True
+        return self.total_time
 
     def print_samples(self, iteration, dest):
         """Print some debug information.

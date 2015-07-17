@@ -48,8 +48,9 @@ def run():
                                               debug_mumble = args.mumble)
     # action!
     print('Figuring out bundles in %s (cutoff = %s) ...' % (args.data, args.cutoff))
-    sampler.run()
+    time = sampler.run()
     print('Done. Results are saved in the same directory as the input file.\n', file=sys.stderr)
+    print('Total time: %s seconds' % time)
     
 if __name__ == '__main__':
     run()
