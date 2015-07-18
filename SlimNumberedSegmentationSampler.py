@@ -101,7 +101,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             for c in cat_dict.keys():
                 cat_count_dict[c] = Counter(cat_dict[c])
 
-            a_time = time()
             # compute the prior probability of each run
             log_p_grid[1] = self.log_length_prior(runs = [left_run, right_run]).sum() * self.temp
             log_p_grid[0] = self.log_length_prior(runs = [left_run + right_run]).sum() * self.temp
@@ -121,7 +120,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                              self.log_cond_prob(right_run, right_run_cat, cat_dict, cat_count_dict, right_run_beta, avoid_cat = left_run_cat)
                                                 
             outcome = sample(a = grid, p = lognormalize(log_p_grid))
-            self.total_time += time() - a_time
 
             if outcome == 1:
                 # insert the new bundle
@@ -268,6 +266,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
     def log_cond_prob(self, obs, cat, cat_dict, cat_count_dict, beta = None, avoid_cat = None):
         """Calculate the conditional probability of observations given category and beta.
         """
+        a_time = time()
         obs_counter = Counter(obs)
         categories_counter = Counter(self.categories)
             
@@ -291,28 +290,29 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 if c == avoid_cat: continue
                 try: cat_N = len(cat_dict[c])
                 except KeyError: cat_N = 0
-                log_prior = np.log(categories_counter[c] / (len(self.categories) + self.alpha))
-                log_lik = 0
+                prior = categories_counter[c] / (len(self.categories) + self.alpha)
+                lik = 1
                 for y in self.support:
                     try: cat_n = cat_count_dict[cat][y]
                     except KeyError: cat_n = 0
                     try: y_count = obs_counter[y]
                     except KeyError: y_count = 0
-                    log_lik += y_count * np.log((cat_n + self.beta[c]) / (cat_N + self.support_size * self.beta[c]))
-                p += np.exp(log_prior + log_lik)
+                    lik *= ((cat_n + self.beta[c]) / (cat_N + self.support_size * self.beta[c])) ** y_count
+                p += prior * lik
                 
             # new category    
-            log_prior = np.log(self.alpha / (len(self.categories) + self.alpha))
-            log_lik = 0
+            prior = self.alpha / (len(self.categories) + self.alpha)
+            lik = 1
             for y in self.support:
                 try: y_count = obs_counter[y]
                 except KeyError: y_count = 0
-                log_lik += y_count * np.log(1 / self.support_size)
-            p += np.exp(log_prior + log_lik)
+                lik *= (1 / self.support_size) ** y_count
+            p += prior * lik
 
             # convert to log
             if p > 0: log_p += np.log(p)
             
+        self.total_time += time() - a_time
         return log_p
 
     def get_surround_runs(self, bps, target_bp, data=None):
@@ -456,7 +456,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                     self.print_samples(iteration = self.iteration, dest = sample_fp)
                     for cat in np.unique(self.categories):
                         print(*[self.cutoff, self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
-                if self.no_improvement():
+                if self.no_improvement(200):
                     break
             else:
                 # record the results for each iteration
