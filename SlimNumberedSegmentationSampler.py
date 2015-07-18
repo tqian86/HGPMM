@@ -106,13 +106,13 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             log_p_grid[0] = self.log_length_prior(runs = [left_run + right_run]).sum() * self.temp
             
             # compute the likelihood of each case
-            if nth in self.bundles:
+            try:
                 if original_idx == len(self.bundles) - 1: next_run_cat = None
                 else: next_run_cat = self.categories[original_idx + 1]
                 log_p_grid[0] += self.log_cond_prob(obs = left_run + right_run, cat = None,
                                                     cat_dict = cat_dict, cat_count_dict = cat_count_dict,
                                                     beta = together_beta, avoid_cat = next_run_cat)
-            else:
+            except:
                 log_p_grid[0] += self.log_cond_prob(obs = left_run + right_run, cat = left_run_cat,
                                                     cat_dict = cat_dict, cat_count_dict = cat_count_dict, beta = together_beta)
                 
@@ -399,7 +399,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 
                 # add this bundle to cluster_dict
                 cat_bundle_count[cat] += 1
-                cat_flat_dict[cat].append(bundle_data)
+                cat_flat_dict[cat].extend(bundle_data)
 
             # if this is a new category
             else:
