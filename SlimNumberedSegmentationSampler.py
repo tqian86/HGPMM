@@ -124,10 +124,9 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             for c in cat_dict.keys():
                 cat_count_dict[c] = Counter(cat_dict[c])
 
-            a_time = time()
             # compute the prior probability of each run
-            log_p_grid[0] = self.log_length_prior(runs = [left_run + right_run]).sum() * self.annealing_temp
-            log_p_grid[1] = self.log_length_prior(runs = [left_run, right_run]).sum() * self.annealing_temp
+            log_p_grid[0] = self.log_length_prior(runs = [left_run + right_run]).sum() 
+            log_p_grid[1] = self.log_length_prior(runs = [left_run, right_run]).sum() 
             
             # compute the likelihood of each case
             try:
@@ -144,7 +143,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                              self.log_cond_prob(right_run, right_run_cat, cat_dict, cat_count_dict, right_run_beta, avoid_cat = left_run_cat)
                                                 
             outcome = sample(a = grid, p = lognormalize(log_p_grid))
-            self.total_time += time() - a_time
             
             if outcome == 1:
                 # insert the new bundle
@@ -221,8 +219,11 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         bundle_count = len(self.bundles)
         for i in xrange(bundle_count):
             # get all the observations in this bundle
-            try: bundle_obs = self.data[self.bundles[i]:self.bundles[i+1]]
-            except IndexError: bundle_obs = self.data[self.bundles[i]:]
+            try: bundle_obs = list(self.data[self.bundles[i]:self.bundles[i+1]])
+            except IndexError: bundle_obs = list(self.data[self.bundles[i]:])
+            # count each support dim
+            y_count_arr = np.array([bundle_obs.count(y) for y in self.support])
+
             # get a category - observations dict
             cat_dict = self.get_category_flat_dict(avoid = i)
             
@@ -240,18 +241,17 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                     log_likelihood = len(bundle_obs) * np.log(1 / self.support_size)
                 else:
                     log_crp_prior = np.log(cat_count[cat] / (bundle_count - 1 + self.alpha))
-                    log_likelihood = 0
-                    for y in self.support:
-                        y_count = (bundle_obs == y).sum()
-                        log_likelihood += y_count * np.log(((cat_dict[cat] == y).sum() + self.beta[cat]) /
-                                                           (cat_dict[cat].shape[0] + self.support_size * self.beta[cat]))
+                    cat_n_arr = np.array([(cat_dict[cat] == y).sum() for y in self.support])
+                    log_likelihood = (y_count_arr * np.log((cat_n_arr + self.beta[cat]) /
+                                                          (cat_dict[cat].shape[0] + self.support_size * self.beta[cat]))).sum()
                 
                 log_p_grid[cat_index] = log_crp_prior + log_likelihood
             
             # sample new categories
-            self.categories[i] = np.random.choice(a = cat_grid, p = lognormalize(log_p_grid))
+            self.categories[i] = sample(a = cat_grid, p = lognormalize(log_p_grid))
             if self.categories[i] == new_cat: self.beta[new_cat] = self.ibeta
 
+        return
         # address the label switching problem to some degree
         cat_dict = self.get_category_flat_dict()
         cat_support_count = np.empty(shape = (len(cat_dict.keys()), self.support_size))
@@ -293,19 +293,14 @@ class SlimNumberedSegmentationSampler(BaseSampler):
     def log_cond_prob(self, obs, cat, cat_dict, cat_count_dict, beta = None, avoid_cat = None):
         """Calculate the conditional probability of observations given category and beta.
         """
-        obs_counter = Counter(obs)
-        categories_counter = Counter(self.categories)
-            
         log_p = 0
+        y_count_arr = np.array([obs.count(y) for y in self.support])
+
         if cat is not None:
             try: cat_N = len(cat_dict[cat])
             except KeyError: cat_N = 0
-            for y in self.support:
-                try: cat_n = cat_count_dict[cat][y]
-                except KeyError: cat_n = 0
-                try: y_count = obs_counter[y]
-                except KeyError: y_count = 0
-                log_p += y_count * np.log((cat_n + beta) / (cat_N + self.support_size * beta))
+            cat_n_arr = np.array([cat_count_dict[cat][y] if cat in cat_count_dict and y in cat_count_dict[cat] else 0 for y in self.support])
+            log_p += (y_count_arr * np.log((cat_n_arr + beta) / (cat_N + self.support_size * beta))).sum()
         else:
             
             # If cat is None, then marginalize over all possible categories
@@ -314,26 +309,18 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             p = 0
             for c in cat_dict.keys():
                 if c == avoid_cat: continue
-                try: cat_N = len(cat_dict[c])
-                except KeyError: cat_N = 0
-                prior = categories_counter[c] / (len(self.categories) + self.alpha)
-                lik = 1
-                for y in self.support:
-                    try: cat_n = cat_count_dict[cat][y]
-                    except KeyError: cat_n = 0
-                    try: y_count = obs_counter[y]
-                    except KeyError: y_count = 0
-                    lik *= ((cat_n + self.beta[c]) / (cat_N + self.support_size * self.beta[c])) ** y_count
-                p += prior * lik
+                cat_N = len(cat_dict[c])
+                # prior 
+                prior = self.categories.count(c) / (len(self.categories) + self.alpha)
+                # likelihood
+                cat_n_arr = np.array([cat_count_dict[cat][y] if cat in cat_count_dict and y in cat_count_dict[cat] else 0 for y in self.support])
+                likelihood = (((cat_n_arr + self.beta[c]) / (cat_N + self.support_size * self.beta[c])) ** y_count_arr).prod()
+                p += prior * likelihood
                 
             # new category    
             prior = self.alpha / (len(self.categories) + self.alpha)
-            lik = 1
-            for y in self.support:
-                try: y_count = obs_counter[y]
-                except KeyError: y_count = 0
-                lik *= (1 / self.support_size) ** y_count
-            p += prior * lik
+            likelihood = ((1 / self.support_size) ** y_count_arr).prod()
+            p += prior * likelihood
 
             # convert to log
             if p > 0: log_p += np.log(p)
@@ -469,7 +456,9 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         for i in xrange(self.sample_size):
             self.iteration = i + 1
             self.set_temperature(self.iteration)
+            a_time = time()
             self.batch_sample_bundles()
+            self.total_time += time() - a_time
             self.batch_sample_l()
             self.batch_sample_categories()
             if self.sample_alpha: self.batch_sample_alpha()
