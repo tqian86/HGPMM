@@ -1,16 +1,26 @@
 # -*- coding: utf-8 -*-
 
 from __future__ import print_function, division
-from BaseSampler import *
+from clsampler import BaseSampler, sample, lognormalize
+import numpy as np
 from scipy.stats import poisson, gamma
 from scipy.stats import beta as beta_dist
 from time import time
 from collections import Counter
-import bisect
+import bisect, gzip, random, math
+
+def smallest_unused_label(int_labels):
+    
+    if len(int_labels) == 0: return [], [], 1
+    label_count = np.bincount(int_labels)
+    try: new_label = np.where(label_count == 0)[0][1]
+    except IndexError: new_label = max(int_labels) + 1
+    uniq_labels = np.unique(int_labels)
+    return label_count, uniq_labels, new_label
 
 class SlimNumberedSegmentationSampler(BaseSampler):
 
-    def __init__(self, data_file, sample_size, ialpha = 1, ibeta=1, cutoff=None, annealing=False,
+    def __init__(self, sample_size = 1000, cl_mode = False, ialpha = 1, ibeta=1, cutoff=None, annealing=False,
                  output_to_stdout = False, record_best = False, debug_mumble = False,
                  sample_alpha = True, sample_beta = True, use_context = False,
                  prior_type = 'Poisson', poisson_prior_shape = 1, poisson_prior_rate = 1,
@@ -18,7 +28,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         """Initialize the sampler.
         """
         BaseSampler.__init__(self,
-                             data_file = data_file,
+                             cl_mode = cl_mode,
                              sample_size = sample_size,
                              cutoff = cutoff,
                              annealing = annealing,
@@ -33,7 +43,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         self.ibeta = ibeta
 
         if self.prior_type == 'Poisson':
-            # hyperpriors for self.l
             self.poisson_prior_shape = poisson_prior_shape
             self.poisson_prior_rate = poisson_prior_rate
         elif self.prior_type == 'Geometric':
@@ -48,27 +57,41 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             self.l = np.random.gamma(shape = self.poisson_prior_shape, scale = 1. / self.poisson_prior_rate)
         elif self.prior_type == 'Geometric':
             self.l = np.random.beta(a = self.geom_prior_alpha, b = self.geom_prior_beta)
-                
+
+    def read_csv(self, filepath, header=True):
+        if self.use_context:
+            BaseSampler.read_csv(self,
+                                 filepath = filepath,
+                                 obs_vars = ['pos', 'n.hipo', 'n.rabbit', 'n.snail', 'n.dinasour'],
+                                 header = header)
+        else:
+            BaseSampler.read_csv(self, filepath = filepath, obs_vars = ['pos'], header = header)
+            self.data = np.ravel(self.data, order='C')
+            self.support = np.unique(self.data)
+            self.support_size = len(self.support)
+
+        
     def batch_sample_bundles(self):
         """Perform Gibbs sampling on clusters.
         """
         # we index the sequence of observations using "nth"
-        _, _, new_cat = self.smallest_unused_label(self.categories)
+        _, _, new_cat = smallest_unused_label(self.categories)
         for nth in xrange(1, self.N):
             if nth in self.bundles:
+                
                 original_idx = self.bundles.index(nth)
                 cat_dict = self.get_category_flat_dict(avoid = [original_idx, original_idx - 1])
 
                 # get the left run
                 left_run_cat = self.categories[original_idx-1]
                 left_run_beta = self.beta[left_run_cat]
-                left_run = self.data[self.bundles[original_idx-1]:self.bundles[original_idx]]
+                left_run = list(self.data[self.bundles[original_idx-1]:self.bundles[original_idx]])
 
                 # get the right run
                 right_run_cat = self.categories[original_idx]
                 right_run_beta = self.beta[right_run_cat]
-                try: right_run = self.data[self.bundles[original_idx]:self.bundles[original_idx+1]]
-                except: right_run = self.data[self.bundles[original_idx]:]
+                try: right_run = list(self.data[self.bundles[original_idx]:self.bundles[original_idx+1]])
+                except: right_run = list(self.data[self.bundles[original_idx]:])
                 
                 together_beta = left_run_beta
 
@@ -101,9 +124,10 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             for c in cat_dict.keys():
                 cat_count_dict[c] = Counter(cat_dict[c])
 
+            a_time = time()
             # compute the prior probability of each run
-            log_p_grid[1] = self.log_length_prior(runs = [left_run, right_run]).sum() * self.temp
-            log_p_grid[0] = self.log_length_prior(runs = [left_run + right_run]).sum() * self.temp
+            log_p_grid[0] = self.log_length_prior(runs = [left_run + right_run]).sum() * self.annealing_temp
+            log_p_grid[1] = self.log_length_prior(runs = [left_run, right_run]).sum() * self.annealing_temp
             
             # compute the likelihood of each case
             try:
@@ -120,7 +144,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                              self.log_cond_prob(right_run, right_run_cat, cat_dict, cat_count_dict, right_run_beta, avoid_cat = left_run_cat)
                                                 
             outcome = sample(a = grid, p = lognormalize(log_p_grid))
-
+            self.total_time += time() - a_time
+            
             if outcome == 1:
                 # insert the new bundle
                 bisect.insort(self.bundles, nth)
@@ -160,8 +185,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 - math.lgamma(self.support_size * new_beta + len(cat_dict[cat]))
 
             for y in self.support:
-                log_g_old += math.lgamma(cat_dict[cat].count(y) + old_beta) - math.lgamma(old_beta)
-                log_g_new += math.lgamma(cat_dict[cat].count(y) + new_beta) - math.lgamma(new_beta)
+                log_g_old += math.lgamma((cat_dict[cat] == y).sum() + old_beta) - math.lgamma(old_beta)
+                log_g_new += math.lgamma((cat_dict[cat] == y).sum() + new_beta) - math.lgamma(new_beta)
 
             # compute candidate densities q for old and new beta
             # since the proposal distribution is normal this step is not needed
@@ -202,7 +227,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             cat_dict = self.get_category_flat_dict(avoid = i)
             
             # get existing categories, novel category, and existing category counts
-            try: cat_count, uniq_cats, new_cat = self.smallest_unused_label(self.categories[:i] + self.categories[i+1:])
+            try: cat_count, uniq_cats, new_cat = smallest_unused_label(self.categories[:i] + self.categories[i+1:])
             except IndexError: cat_count, uniq_cats, new_cat = self.smallest_unused_label(self.categories[:i])
             # set up grid
             cat_grid = list(uniq_cats) + [new_cat]
@@ -217,8 +242,9 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                     log_crp_prior = np.log(cat_count[cat] / (bundle_count - 1 + self.alpha))
                     log_likelihood = 0
                     for y in self.support:
-                        y_count = bundle_obs.count(y)
-                        log_likelihood += y_count * np.log((cat_dict[cat].count(y) + self.beta[cat]) / (len(cat_dict[cat]) + self.support_size * self.beta[cat]))
+                        y_count = (bundle_obs == y).sum()
+                        log_likelihood += y_count * np.log(((cat_dict[cat] == y).sum() + self.beta[cat]) /
+                                                           (cat_dict[cat].shape[0] + self.support_size * self.beta[cat]))
                 
                 log_p_grid[cat_index] = log_crp_prior + log_likelihood
             
@@ -231,7 +257,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         cat_support_count = np.empty(shape = (len(cat_dict.keys()), self.support_size))
         for cat in cat_dict.iterkeys():
             cat_idx = cat_dict.keys().index(cat)
-            cat_support_count[cat_idx] = [-1 * cat_dict[cat].count(_) for _ in self.support] # -1 for descending
+            cat_support_count[cat_idx] = [-1 * (cat_dict[cat] == _).sum() for _ in self.support] # -1 for descending
         
         reindex = list(np.lexsort((eval(','.join(['cat_support_count[:,%s]' % _ for _ in xrange(self.support_size - 1, -1, -1)])))))
         categories_copy = np.array(self.categories)
@@ -255,6 +281,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         if runs is None and length_list is None: 
             raise NameError('No length or run specified')
 
+        #print(runs)
         if runs is not None: length_list = [len(_) for _ in runs]
 
         # length-based prior
@@ -266,7 +293,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
     def log_cond_prob(self, obs, cat, cat_dict, cat_count_dict, beta = None, avoid_cat = None):
         """Calculate the conditional probability of observations given category and beta.
         """
-        a_time = time()
         obs_counter = Counter(obs)
         categories_counter = Counter(self.categories)
             
@@ -312,7 +338,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             # convert to log
             if p > 0: log_p += np.log(p)
             
-        self.total_time += time() - a_time
         return log_p
 
     def get_surround_runs(self, bps, target_bp, data=None):
@@ -329,7 +354,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         else:
             right_run = data[target_bp:bps[anchor]]
 
-        return left_run, right_run
+        return list(left_run), list(right_run)
 
     def get_category_flat_dict(self, avoid=None, bundles=None, categories=None, data=None):
         """Returns category-indexed obs.
@@ -345,7 +370,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 elif i == avoid: continue
             try: run = data[bundles[i]:bundles[i+1]]
             except IndexError: run = data[bundles[i]:]
-            try: cat_flat_dict[categories[i]].extend(run)
+            try: cat_flat_dict[categories[i]] = np.hstack((cat_flat_dict[categories[i]], run))
             except KeyError: cat_flat_dict[categories[i]] = run
         return cat_flat_dict
 
@@ -395,11 +420,12 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 for y in self.support:
                     try: y_count = bundle_counter[y]
                     except KeyError: y_count = 0
-                    loglik += y_count * np.log((cat_flat_dict[cat].count(y) + beta[cat]) / (len(cat_flat_dict[cat]) + self.support_size * beta[cat]))
+                    loglik += y_count * np.log(((cat_flat_dict[cat] == y).sum() + beta[cat]) /
+                                               (cat_flat_dict[cat].shape[0] + self.support_size * beta[cat]))
                 
                 # add this bundle to cluster_dict
                 cat_bundle_count[cat] += 1
-                cat_flat_dict[cat].extend(bundle_data)
+                cat_flat_dict[cat] = np.hstack((cat_flat_dict[cat], bundle_data))
 
             # if this is a new category
             else:
@@ -442,7 +468,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         # run the sampler
         for i in xrange(self.sample_size):
             self.iteration = i + 1
-            self.set_temperature()
+            self.set_temperature(self.iteration)
             self.batch_sample_bundles()
             self.batch_sample_l()
             self.batch_sample_categories()
@@ -456,7 +482,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                     self.print_samples(iteration = self.iteration, dest = sample_fp)
                     for cat in np.unique(self.categories):
                         print(*[self.cutoff, self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
-                if self.no_improvement(200):
+                if self.no_improvement(500):
                     break
             else:
                 # record the results for each iteration

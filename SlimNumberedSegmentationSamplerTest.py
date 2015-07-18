@@ -29,8 +29,7 @@ def run():
 
     args = parser.parse_args()
 
-    sampler = SlimNumberedSegmentationSampler(data_file = args.data, 
-                                              sample_size = args.size, 
+    sampler = SlimNumberedSegmentationSampler(sample_size = args.size, 
                                               cutoff = args.cutoff,
                                               ialpha = args.alpha,
                                               ibeta = args.beta,
@@ -46,6 +45,8 @@ def run():
                                               output_to_stdout = args.output_to_stdout,
                                               record_best = args.search,
                                               debug_mumble = args.mumble)
+    sampler.read_csv(args.data)
+    
     # action!
     print('Figuring out bundles in %s (cutoff = %s) ...' % (args.data, args.cutoff))
     time = sampler.run()
