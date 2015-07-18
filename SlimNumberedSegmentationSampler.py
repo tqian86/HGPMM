@@ -9,6 +9,9 @@ from time import time
 from collections import Counter
 import bisect, gzip, random, math
 
+def log_dpois(y, rate):
+    return -rate + y * math.log(rate) - math.log(math.factorial(y))
+
 def smallest_unused_label(int_labels):
     
     if len(int_labels) == 0: return [], [], 1
@@ -77,6 +80,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         # we index the sequence of observations using "nth"
         _, _, new_cat = smallest_unused_label(self.categories)
         for nth in xrange(1, self.N):
+            a_time = time()
             if nth in self.bundles:
                 
                 original_idx = self.bundles.index(nth)
@@ -132,7 +136,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             try:
                 if original_idx == len(self.bundles) - 1: next_run_cat = None
                 else: next_run_cat = self.categories[original_idx + 1]
-                log_p_grid[0] += self.log_cond_prob(obs = left_run + right_run, cat = None,
+                log_p_grid[0] += self.log_cond_prob(obs = left_run + right_run, cat = left_run_cat,
                                                     cat_dict = cat_dict, cat_count_dict = cat_count_dict,
                                                     beta = together_beta, avoid_cat = next_run_cat)
             except:
@@ -158,6 +162,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                     if new_cat not in self.beta: self.beta[new_cat] = self.ibeta
                     # since we copied the category of the left run, its associated beta is already in self.beta
 
+            self.total_time += time() - a_time
         return
 
     def batch_sample_beta(self):
@@ -286,7 +291,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
         # length-based prior
         if self.prior_type == 'Poisson':
-            return poisson.logpmf(length_list, c_l)
+            return np.array([log_dpois(_, c_l) for _ in length_list])#poisson.logpmf(length_list, c_l)
         elif self.prior_type == 'Geometric':
             return np.array([(run_length - 1) * np.log(1 - c_l) + np.log(c_l) for run_length in length_list])
 
@@ -324,7 +329,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
             # convert to log
             if p > 0: log_p += np.log(p)
-            
+
         return log_p
 
     def get_surround_runs(self, bps, target_bp, data=None):
@@ -456,9 +461,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         for i in xrange(self.sample_size):
             self.iteration = i + 1
             self.set_temperature(self.iteration)
-            a_time = time()
             self.batch_sample_bundles()
-            self.total_time += time() - a_time
             self.batch_sample_l()
             self.batch_sample_categories()
             if self.sample_alpha: self.batch_sample_alpha()
