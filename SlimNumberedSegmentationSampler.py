@@ -15,7 +15,6 @@ def log_dpois(y, rate):
 def log_dgamma(x, shape, scale):
     return (shape - 1) * np.log(x) + (-1 * x / scale) - math.lgamma(shape) - shape * np.log(scale)
 
-
 def smallest_unused_label(int_labels):
     
     if len(int_labels) == 0: return [], [], 1
@@ -74,7 +73,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         else:
             BaseSampler.read_csv(self, filepath = filepath, obs_vars = ['pos'], header = header)
             self.data = np.ravel(self.data, order='C')
-            self.support = np.unique(self.data)
+            self.support = np.unique(self.original_data)
             self.support_size = len(self.support)
 
         
@@ -451,9 +450,11 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         if self.cutoff:
             beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '-cutoff%d.csv.gz' % self.cutoff, 'w')
             sample_fp = gzip.open(self.source_dirname + 'bundle-samples-' + self.source_filename + '-cutoff%d.csv.gz' % self.cutoff, 'w')
+            predict_fp = gzip.open(self.source_dirname + 'predictions-' + self.source_filename + '-cutoff%d.csv.gz' % self.cutoff, 'w')
         else:
             beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '.csv.gz', 'w')
             sample_fp = gzip.open(self.source_dirname + 'bundle-samples-' + self.source_filename + '.csv.gz', 'w')
+            predict_fp = gzip.open(self.source_dirname + 'predictions-' + self.source_filename + '-.csv.gz' % self.cutoff, 'w')
 
         header = 'iteration,loglik,alpha,l,'
         header += ','.join([str(t) for t in xrange(1, self.N+1)])
@@ -479,7 +480,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                     self.print_samples(iteration = self.iteration, dest = sample_fp)
                     for cat in np.unique(self.categories):
                         print(*[self.cutoff, self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
-                if self.no_improvement(500):
+                if self.no_improvement():
                     break
             else:
                 # record the results for each iteration
@@ -488,9 +489,15 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 for cat in np.unique(self.categories):
                     print(*[self.cutoff, self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
 
+        predicted = self.predict(self.best_sample[0])
+        print(*['t', 'pos', 'probability'], sep=',', file=predict_fp)
+        for i in xrange(self.support_size):
+            print(*[self.N+1, self.support[i], predicted[i]], sep=',', file=predict_fp)
+                    
         # close files
         beta_fp.close()
         sample_fp.close()
+        predict_fp.close()
 
         return self.total_time
 
@@ -509,3 +516,44 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
         if self.output_to_stdout:
             print(output, file = sys.stdout)
+
+    def predict(self, sample):
+        """Calculate the probability of the entire support at the next time step
+        given a sample.
+        """
+        bundles, categories, l, alpha, beta = sample
+        cat_flat_dict = self.get_category_flat_dict(bundles=bundles, categories=categories)
+        
+        # initialize the final probability value
+        p = np.zeros(self.support_size)
+        
+        # calculate a few probabilities regarding whether the current bundle stops or continues
+        current_bundle_length = self.N - bundles[-1]
+        p_bl_gtoeq_N = 1 - poisson.cdf(self.N - 1, l)
+        p_bl_eq_N = np.exp(log_dpois(self.N, l))
+        p_b_new = p_bl_eq_N / p_bl_gtoeq_N
+        p_b_cont = 1 - p_b_new
+
+        # case 1: bundle continues
+        old_cat = categories[-1]
+        for i in xrange(self.support_size):
+            p[i] += p_b_cont * ((cat_flat_dict[old_cat] == self.support[i]).sum() + beta[old_cat]) / (cat_flat_dict[old_cat].shape[0] + self.support_size * beta[old_cat])
+        # case 2: new bundle
+        for cat in cat_flat_dict.iterkeys():
+            if cat == old_cat: continue
+            crp_prior_p = categories.count(cat) / (len(categories) + alpha)
+            # loglik
+            for i in xrange(self.support_size):
+                likelihood = ((cat_flat_dict[cat] == self.support[i]).sum() + beta[cat]) / (cat_flat_dict[cat].shape[0] + self.support_size * beta[cat])
+                p[i] += p_b_new * crp_prior_p * likelihood
+            
+        # if this is a new category
+        crp_prior_p = alpha / (len(categories) + alpha)
+        for i in xrange(self.support_size):
+            likelihood = (1 / self.support_size)
+            p[i] += p_b_new * crp_prior_p * likelihood
+
+        p = p / p.sum()
+        
+        return p
+        
