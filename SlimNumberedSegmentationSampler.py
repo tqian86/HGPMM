@@ -12,6 +12,10 @@ import bisect, gzip, random, math
 def log_dpois(y, rate):
     return -rate + y * math.log(rate) - math.log(math.factorial(y))
 
+def log_dgamma(x, shape, scale):
+    return (shape - 1) * np.log(x) + (-1 * x / scale) - math.lgamma(shape) - shape * np.log(scale)
+
+
 def smallest_unused_label(int_labels):
     
     if len(int_labels) == 0: return [], [], 1
@@ -277,7 +281,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         self.beta = beta_copy
         return
 
-
     def log_length_prior(self, runs=None, length_list=None, c_l=None):
         """Calculate the prior probability of a run, based on
         its length and its category
@@ -306,8 +309,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             except KeyError: cat_N = 0
             cat_n_arr = np.array([cat_count_dict[cat][y] if cat in cat_count_dict and y in cat_count_dict[cat] else 0 for y in self.support])
             log_p += (y_count_arr * np.log((cat_n_arr + beta) / (cat_N + self.support_size * beta))).sum()
+
         else:
-            
             # If cat is None, then marginalize over all possible categories
             # the new bundle can take. This applies both when removing an 
             # existing breakpoint or adding a new breakpoint.
@@ -378,9 +381,11 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
         # calculate the logp of l first
         if self.prior_type == 'Poisson':
-            l_logp = gamma.logpdf(l, a = self.poisson_prior_shape, scale = 1 / self.poisson_prior_rate)
+            #l_logp = gamma.logpdf(l, a = self.poisson_prior_shape, scale = 1 / self.poisson_prior_rate)
+            l_logp = log_dgamma(l, self.poisson_prior_shape, 1 / self.poisson_prior_rate)
         else:
             l_logp = beta_dist.logpdf(l, a = self.geom_prior_alpha, b = self.geom_prior_beta)
+
         total_logp = l_logp
 
         for i in xrange(len(bundles)):
@@ -396,7 +401,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 
             # calculate the length prior
             if self.prior_type == 'Poisson':
-                length_prior_logp = poisson.logpmf(bundle_length, l)
+                length_prior_logp = log_dpois(bundle_length, l)
             else:
                 length_prior_logp = (bundle_length - 1) * np.log(1 - l) + np.log(l)
                 
