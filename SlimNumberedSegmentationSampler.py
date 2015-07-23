@@ -453,7 +453,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         else:
             beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '.csv.gz', 'w')
             sample_fp = gzip.open(self.source_dirname + 'bundle-samples-' + self.source_filename + '.csv.gz', 'w')
-            predict_fp = gzip.open(self.source_dirname + 'predictions-' + self.source_filename + '-.csv.gz' % self.cutoff, 'w')
+            predict_fp = gzip.open(self.source_dirname + 'predictions-' + self.source_filename + '.csv.gz', 'w')
 
         header = 'iteration,loglik,alpha,l,'
         header += ','.join([str(t) for t in xrange(1, self.N+1)])
@@ -488,11 +488,13 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 for cat in np.unique(self.categories):
                     print(*[self.cutoff, self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
 
-        predicted = self.predict(self.best_sample[0])
-        print(*['t', 'pos', 'probability'], sep=',', file=predict_fp)
-        for i in xrange(self.support_size):
-            print(*[self.N+1, self.support[i], predicted[i]], sep=',', file=predict_fp)
-                    
+        # write out predictions
+        if self.record_best:
+            predicted = self.predict(self.best_sample[0])
+            print(*['t', 'pos', 'probability'], sep=',', file=predict_fp)
+            for i in xrange(self.support_size):
+                print(*[self.N+1, self.support[i], predicted[i]], sep=',', file=predict_fp)
+                
         # close files
         beta_fp.close()
         sample_fp.close()
