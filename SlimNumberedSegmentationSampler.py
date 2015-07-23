@@ -380,7 +380,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
         # calculate the logp of l first
         if self.prior_type == 'Poisson':
-            #l_logp = gamma.logpdf(l, a = self.poisson_prior_shape, scale = 1 / self.poisson_prior_rate)
             l_logp = log_dgamma(l, self.poisson_prior_shape, 1 / self.poisson_prior_rate)
         else:
             l_logp = beta_dist.logpdf(l, a = self.geom_prior_alpha, b = self.geom_prior_beta)
