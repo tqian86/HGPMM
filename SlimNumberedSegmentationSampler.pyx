@@ -19,9 +19,14 @@ cdef double log_dpois(double y, double rate):
 cdef double log_dgamma(double x, double shape, double scale):
     return (shape - 1) * log(x) + (-1 * x / scale) - lgamma(shape) - shape * log(scale)
 
-def smallest_unused_label(int_labels):
+def smallest_unused_label(list int_labels):
     
     if len(int_labels) == 0: return np.array([]), np.array([]), 1
+
+    # cdefs
+    #cdef np.ndarray label_count
+    cdef int new_label
+    
     label_count = np.bincount(int_labels)
     try: new_label = np.where(label_count == 0)[0][1]
     except IndexError: new_label = max(int_labels) + 1
@@ -89,44 +94,47 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             self.data = np.ravel(self.data, order='C')
             self.support = np.unique(self.original_data)
             self.support_size = len(self.support)
-
+            
+    #@cython.boundscheck(False) # turn of bounds-checking for entire function
     def batch_sample_bundles(self):
         """Perform Gibbs sampling on clusters.
         """
-        cdef int nth, left_run_cat, original_idx, would_be_idx, outcome, next_run_cat, c
-        cdef double left_run_beta, right_run_beta, together_beta
+        cdef int nth, left_run_cat, original_idx, would_be_idx, outcome, c, N
+        cdef double left_run_beta, right_run_beta, together_beta, a_time
         cdef list left_run, right_run
-        cdef list grid
+        cdef list grid, categories, bundles, log_p_grid
         cdef dict cat_dict, cat_count_dict
-        cdef np.ndarray[np.float_t, ndim=1] log_p_grid
+
+        bundles = self.bundles
+        categories = self.categories
+        N = self.N
         
         # we index the sequence of observations using "nth"
-        _, _, new_cat = smallest_unused_label(self.categories)
-        for nth in xrange(1, self.N):
-            a_time = time()
-            if nth in self.bundles:
+        _, _, new_cat = smallest_unused_label(categories)
+        for nth in xrange(1, N):
+            if nth in bundles:
                 
-                original_idx = self.bundles.index(nth)
+                original_idx = bundles.index(nth)
                 cat_dict = self.get_category_flat_dict(avoid = [original_idx, original_idx - 1])
 
                 # get the left run
-                left_run_cat = self.categories[original_idx-1]
+                left_run_cat = categories[original_idx-1]
                 left_run_beta = self.beta[left_run_cat]
-                left_run = list(self.data[self.bundles[original_idx-1]:self.bundles[original_idx]])
+                left_run = list(self.data[bundles[original_idx-1]:bundles[original_idx]])
 
                 # get the right run
-                right_run_cat = self.categories[original_idx]
+                right_run_cat = categories[original_idx]
                 right_run_beta = self.beta[right_run_cat]
-                try: right_run = list(self.data[self.bundles[original_idx]:self.bundles[original_idx+1]])
-                except: right_run = list(self.data[self.bundles[original_idx]:])
+                try: right_run = list(self.data[bundles[original_idx]:bundles[original_idx+1]])
+                except: right_run = list(self.data[bundles[original_idx]:])
                 
                 together_beta = left_run_beta
 
             else:
-                would_be_idx = bisect.bisect(self.bundles, nth)
+                would_be_idx = bisect.bisect(bundles, nth)
                 cat_dict = self.get_category_flat_dict(avoid = [would_be_idx - 1])
 
-                left_run_cat = self.categories[would_be_idx-1]
+                left_run_cat = categories[would_be_idx-1]
                 left_run_beta = self.beta[left_run_cat]
 
                 right_run_cat = None
@@ -135,11 +143,11 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 together_beta = left_run_beta
 
                 # get the left and right runs of a breakpoint
-                left_run, right_run = self.get_surround_runs(bps = self.bundles, target_bp = nth)
+                left_run, right_run = self.get_surround_runs(bps = bundles, target_bp = nth)
                 
             # set up the grid
             grid = [0, 1]
-            log_p_grid = np.empty(len(grid))
+            log_p_grid = [0, 0]
 
             # pre-count
             cat_count_dict = {}
@@ -186,7 +194,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                     self.categories.insert(self.bundles.index(nth), new_cat)
                     if new_cat not in self.beta: self.beta[new_cat] = self.ibeta
 
-            self.total_time += time() - a_time
         return
 
     def batch_sample_beta(self):
@@ -326,6 +333,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         elif self.prior_type == 'Geometric':
             return np.array([(run_length - 1) * log(1 - l) + log(l) for run_length in length_list])
 
+    @cython.boundscheck(False) # turn of bounds-checking for entire function
     def log_cond_prob(self, list obs, cat, dict cat_dict, dict cat_count_dict, beta = None, avoid_cat = None):
         """Calculate the conditional probability of observations given category and beta.
         """
@@ -370,6 +378,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
         return log_p
 
+    @cython.boundscheck(False) # turn of bounds-checking for entire function
     def get_surround_runs(self, list bps, int target_bp, data=None):
         """Returns the left and right runs of a target point.
         """
@@ -387,6 +396,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
         return left_run, right_run
 
+    @cython.boundscheck(False) # turn of bounds-checking for entire function    
     def get_category_flat_dict(self, avoid=None, bundles=None, categories=None, data=None):
         """Returns category-indexed obs.
         """
@@ -397,15 +407,23 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         if bundles is None: bundles = self.bundles
         if categories is None: categories = self.categories
 
+        cdef int num_bundles = len(bundles)
+        
         cdef dict cat_flat_dict = {}
-        for i in xrange(len(bundles)):
+        for i in xrange(num_bundles):
             if avoid is not None:
                 if type(avoid) is list and i in avoid: continue
-                elif i == avoid: continue
-            try: run = data[bundles[i]:bundles[i+1]]
-            except IndexError: run = data[bundles[i]:]
-            try: cat_flat_dict[categories[i]] = np.hstack((cat_flat_dict[categories[i]], run))
-            except KeyError: cat_flat_dict[categories[i]] = run
+                if i == avoid: continue
+
+            if i == num_bundles - 1:
+                run = data[bundles[i]:]
+            else:
+                run = data[bundles[i]:bundles[i+1]]
+
+            if categories[i] in cat_flat_dict:
+                cat_flat_dict[categories[i]] = np.hstack((cat_flat_dict[categories[i]], run))
+            else:
+                cat_flat_dict[categories[i]] = run
         return cat_flat_dict
 
     def _logprob(self, sample):
@@ -493,6 +511,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
     def run(self):
         """Run the sampler.
         """
+        a_time = time()
         cdef str header
         if self.cutoff:
             beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '-cutoff%d.csv.gz' % self.cutoff, 'w')
@@ -549,6 +568,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         beta_fp.close()
         sample_fp.close()
         predict_fp.close()
+        self.total_time += time() - a_time
 
         return self.total_time
 
