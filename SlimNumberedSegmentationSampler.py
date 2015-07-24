@@ -102,11 +102,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 
                 together_beta = left_run_beta
 
-                # remove
-                del self.bundles[original_idx]
-                del self.categories[original_idx]
-                if self.categories.count(right_run_cat) == 0:
-                    del self.beta[right_run_cat]
             else:
                 would_be_idx = bisect.bisect(self.bundles, nth)
                 cat_dict = self.get_category_flat_dict(avoid = [would_be_idx - 1])
@@ -136,13 +131,19 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             log_p_grid[1] = self.log_length_prior(runs = [left_run, right_run]).sum() 
             
             # compute the likelihood of each case
-            try:
+            if right_run_cat: # which means the break point already exists
                 if original_idx == len(self.bundles) - 1: next_run_cat = None
                 else: next_run_cat = self.categories[original_idx + 1]
                 log_p_grid[0] += self.log_cond_prob(obs = left_run + right_run, cat = left_run_cat,
                                                     cat_dict = cat_dict, cat_count_dict = cat_count_dict,
                                                     beta = together_beta, avoid_cat = next_run_cat)
-            except:
+                # remove to assume an outcome of 0
+                del self.bundles[original_idx]
+                del self.categories[original_idx]
+                if right_run_cat not in self.categories:
+                    del self.beta[right_run_cat]
+
+            else:
                 log_p_grid[0] += self.log_cond_prob(obs = left_run + right_run, cat = left_run_cat,
                                                     cat_dict = cat_dict, cat_count_dict = cat_count_dict, beta = together_beta)
                 
@@ -163,7 +164,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                     # which will almost surely will be replaced
                     self.categories.insert(self.bundles.index(nth), new_cat)
                     if new_cat not in self.beta: self.beta[new_cat] = self.ibeta
-                    # since we copied the category of the left run, its associated beta is already in self.beta
 
             self.total_time += time() - a_time
         return
