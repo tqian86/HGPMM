@@ -119,7 +119,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 
             # set up the grid
             grid = [0, 1]
-            log_p_grid = np.empty(len(grid))
+            log_p_grid = np.empty(2)
 
             # pre-count
             cat_count_dict = {}
@@ -358,12 +358,16 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         if categories is None: categories = self.categories
 
         cat_flat_dict = {}
-        for i in xrange(len(bundles)):
+        num_bundles = len(bundles)
+        for i in xrange(num_bundles):
             if avoid is not None:
                 if type(avoid) is list and i in avoid: continue
-                elif i == avoid: continue
-            try: run = data[bundles[i]:bundles[i+1]]
-            except IndexError: run = data[bundles[i]:]
+                if i == avoid: continue
+
+            if i == num_bundles - 1:
+                run = data[bundles[i]:]
+            else:
+                run = data[bundles[i]:bundles[i+1]]
             try: cat_flat_dict[categories[i]] = np.hstack((cat_flat_dict[categories[i]], run))
             except KeyError: cat_flat_dict[categories[i]] = run
         return cat_flat_dict
