@@ -530,8 +530,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         
         # calculate a few probabilities regarding whether the current bundle stops or continues
         current_bundle_length = self.N - bundles[-1]
-        p_bl_gtoeq_N = 1 - poisson.cdf(self.N - 1, l)
-        p_bl_eq_N = np.exp(log_dpois(self.N, l))
+        p_bl_gtoeq_N = 1 - poisson.cdf(current_bundle_length - 1, l)
+        p_bl_eq_N = np.exp(log_dpois(current_bundle_length, l))
         p_b_new = p_bl_eq_N / p_bl_gtoeq_N
         p_b_cont = 1 - p_b_new
 
