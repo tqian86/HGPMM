@@ -73,17 +73,15 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         else:
             BaseSampler.read_csv(self, filepath = filepath, obs_vars = ['pos'], header = header)
             self.data = np.ravel(self.data, order='C')
-            self.support = np.unique(self.original_data)
+            self.support = np.unique(self.original_data['pos'])
             self.support_size = len(self.support)
 
-        
     def batch_sample_bundles(self):
         """Perform Gibbs sampling on clusters.
         """
         # we index the sequence of observations using "nth"
         _, _, new_cat = smallest_unused_label(self.categories)
         for nth in xrange(1, self.N):
-            a_time = time()
             if nth in self.bundles:
                 
                 original_idx = self.bundles.index(nth)
@@ -149,7 +147,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 
             log_p_grid[1] += self.log_cond_prob(left_run, left_run_cat, cat_dict, cat_count_dict, left_run_beta) + \
                              self.log_cond_prob(right_run, right_run_cat, cat_dict, cat_count_dict, right_run_beta, avoid_cat = left_run_cat)
-                                                
+
             outcome = sample(a = grid, p = lognormalize(log_p_grid))
             
             if outcome == 1:
@@ -165,7 +163,6 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                     self.categories.insert(self.bundles.index(nth), new_cat)
                     if new_cat not in self.beta: self.beta[new_cat] = self.ibeta
 
-            self.total_time += time() - a_time
         return
 
     def batch_sample_beta(self):
@@ -450,6 +447,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
     def run(self):
         """Run the sampler.
         """
+        a_time = time()
         if self.cutoff:
             beta_fp = gzip.open(self.source_dirname + 'beta-samples-' + self.source_filename + '-cutoff%d.csv.gz' % self.cutoff, 'w')
             sample_fp = gzip.open(self.source_dirname + 'bundle-samples-' + self.source_filename + '-cutoff%d.csv.gz' % self.cutoff, 'w')
@@ -503,7 +501,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         beta_fp.close()
         sample_fp.close()
         predict_fp.close()
-
+        self.total_time += time() - a_time
+        
         return self.total_time
 
     def print_samples(self, iteration, dest):
