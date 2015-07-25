@@ -92,7 +92,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         else:
             BaseSampler.read_csv(self, filepath = filepath, obs_vars = ['pos'], header = header)
             self.data = np.ravel(self.data, order='C')
-            self.support = np.unique(self.original_data)
+            self.support = np.unique(self.original_data['pos'])
             self.support_size = len(self.support)
             
     #@cython.boundscheck(False) # turn of bounds-checking for entire function
