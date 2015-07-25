@@ -11,13 +11,20 @@ from time import time
 from collections import Counter
 import bisect, gzip, random, math, sys
 
-from libc.math cimport log, lgamma
+from libc.math cimport log, lgamma, pow
 
 cdef double log_dpois(double y, double rate):
     return -rate + y * log(rate) - lgamma(y+1)
 
 cdef double log_dgamma(double x, double shape, double scale):
     return (shape - 1) * log(x) + (-1 * x / scale) - lgamma(shape) - shape * log(scale)
+
+cdef long count(list l, x):
+     cdef long n = 0
+     cdef long l_idx
+     for l_idx in xrange(len(l)):
+         if l[l_idx] == x: n += 1
+     return n
 
 def smallest_unused_label(list int_labels):
     
@@ -99,7 +106,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
     def batch_sample_bundles(self):
         """Perform Gibbs sampling on clusters.
         """
-        cdef int nth, left_run_cat, original_idx, would_be_idx, outcome, c, N
+        cdef int nth, left_run_cat, right_run_cat, original_idx, would_be_idx, outcome, c, N
         cdef double left_run_beta, right_run_beta, together_beta, a_time
         cdef list left_run, right_run
         cdef list grid, categories, bundles, log_p_grid
@@ -137,7 +144,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 left_run_cat = categories[would_be_idx-1]
                 left_run_beta = self.beta[left_run_cat]
 
-                right_run_cat = None
+                right_run_cat = 0
                 right_run_beta = left_run_beta
 
                 together_beta = left_run_beta
@@ -155,12 +162,12 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 cat_count_dict[c] = Counter(cat_dict[c])
 
             # compute the prior probability of each run
-            log_p_grid[0] = self.log_length_prior(runs = [left_run + right_run]).sum() 
-            log_p_grid[1] = self.log_length_prior(runs = [left_run, right_run]).sum() 
+            log_p_grid[0] = self.log_length_prior(runs = [left_run + right_run])
+            log_p_grid[1] = self.log_length_prior(runs = [left_run, right_run])
             
             # compute the likelihood of each case
-            if right_run_cat is not None:
-                if original_idx == len(bundles) - 1: next_run_cat = None
+            if right_run_cat:
+                if original_idx == len(bundles) - 1: next_run_cat = 0
                 else: next_run_cat = categories[original_idx + 1]
                 log_p_grid[0] += self.log_cond_prob(obs = left_run + right_run, cat = left_run_cat,
                                                     cat_dict = cat_dict, cat_count_dict = cat_count_dict,
@@ -200,9 +207,11 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         """Perform Metropolis Hastings sampling on beta.
         """
         # cdef things
-        cdef int cat, cat_size
+        cdef int cat, cat_size, y_idx, y_count
         cdef double old_beta, new_beta, proposal_sd, log_g_old, log_g_new, log_q_old, log_q_new, u, moving_prob
-        
+        cdef int support_size = self.support_size
+        cdef np.ndarray support = self.support
+
         # derive contexts from breakpoints arrangement
         cdef dict cat_dict = self.get_category_flat_dict()
         for cat in cat_dict.keys():
@@ -219,14 +228,13 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
             cat_size = len(cat_dict[cat])
             
-            log_g_old += lgamma(self.support_size * old_beta) \
-                - lgamma(self.support_size * old_beta + cat_size)
-            log_g_new += lgamma(self.support_size * new_beta) \
-                - lgamma(self.support_size * new_beta + cat_size)
+            log_g_old += lgamma(support_size * old_beta) - lgamma(support_size * old_beta + cat_size)
+            log_g_new += lgamma(support_size * new_beta) - lgamma(support_size * new_beta + cat_size)
 
-            for y in self.support:
-                log_g_old += lgamma((cat_dict[cat] == y).sum() + old_beta) - lgamma(old_beta)
-                log_g_new += lgamma((cat_dict[cat] == y).sum() + new_beta) - lgamma(new_beta)
+            for y_idx in xrange(support_size):
+                y_count = (cat_dict[cat] == support[y_idx]).sum()
+                log_g_old += lgamma(y_count + old_beta) - lgamma(old_beta)
+                log_g_new += lgamma(y_count + new_beta) - lgamma(new_beta)
 
             # compute candidate densities q for old and new beta
             # since the proposal distribution is normal this step is not needed
@@ -258,26 +266,37 @@ class SlimNumberedSegmentationSampler(BaseSampler):
     def batch_sample_categories(self):
         """Perform Gibbs sampling on the category of each bundle.
         """
-        cdef int bundle_count, i, new_cat, cat, cat_index
+        cdef int bundle_count, i, new_cat, cat, cat_index, y_idx, cat_size, cat_n
         cdef dict cat_dict
-        cdef list bundle_obs, cat_grid
-        cdef np.ndarray y_count_arr, log_p_grid, uniq_cats, cat_count
-        cdef double log_crp_prior, log_likelihood
+        cdef list bundle_obs, cat_grid, categories
+        cdef np.ndarray uniq_cats, cat_count
+        cdef double log_crp_prior, log_likelihood, cat_beta
         
+        cdef int support_size = self.support_size
+        cdef np.ndarray support = self.support
+        cdef double alpha = self.alpha
+        categories = self.categories
+
         bundle_count = len(self.bundles)
+        cdef np.ndarray[np.int_t, ndim = 1] y_count_arr = np.empty(support_size, np.int)
+        cdef np.ndarray[np.float_t, ndim = 1] log_p_grid 
+        
+
         for i in xrange(bundle_count):
             # get all the observations in this bundle
-            try: bundle_obs = list(self.data[self.bundles[i]:self.bundles[i+1]])
-            except IndexError: bundle_obs = list(self.data[self.bundles[i]:])
+            if i < bundle_count - 1:
+                bundle_obs = list(self.data[self.bundles[i]:self.bundles[i+1]])
+                cat_count, uniq_cats, new_cat = smallest_unused_label(categories[:i] + categories[i+1:])
+            else:
+                bundle_obs = list(self.data[self.bundles[i]:])
+                cat_count, uniq_cats, new_cat = smallest_unused_label(categories[:i])
             # count each support dim
-            y_count_arr = np.array([bundle_obs.count(y) for y in self.support])
+            for y_idx in xrange(support_size):
+                y_count_arr[y_idx] = bundle_obs.count(support[y_idx])
 
             # get a category - observations dict
             cat_dict = self.get_category_flat_dict(avoid = i)
-            
-            # get existing categories, novel category, and existing category counts
-            try: cat_count, uniq_cats, new_cat = smallest_unused_label(self.categories[:i] + self.categories[i+1:])
-            except IndexError: cat_count, uniq_cats, new_cat = self.smallest_unused_label(self.categories[:i])
+
             # set up grid
             cat_grid = list(uniq_cats) + [new_cat]
             log_p_grid = np.empty(len(cat_grid))
@@ -285,13 +304,16 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             for cat_index in xrange(len(cat_grid)):
                 cat = cat_grid[cat_index]
                 if cat == new_cat:
-                    log_crp_prior = log(self.alpha / (bundle_count - 1 + self.alpha))
-                    log_likelihood = len(bundle_obs) * log(1 / self.support_size)
+                    log_crp_prior = log(alpha)
+                    log_likelihood = len(bundle_obs) * log(1 / support_size)
                 else:
-                    log_crp_prior = log(cat_count[cat] / (bundle_count - 1 + self.alpha))
-                    cat_n_arr = np.array([(cat_dict[cat] == y).sum() for y in self.support])
-                    log_likelihood = (y_count_arr * np.log((cat_n_arr + self.beta[cat]) /
-                                                          (cat_dict[cat].shape[0] + self.support_size * self.beta[cat]))).sum()
+                    cat_beta = self.beta[cat]
+                    cat_size = cat_dict[cat].shape[0]
+                    log_crp_prior = log(cat_count[cat])
+                    log_likelihood = 0
+                    for y_idx in xrange(support_size):
+                        cat_n = (cat_dict[cat] == support[y_idx]).sum()
+                        log_likelihood += y_count_arr[y_idx] * log((cat_n + cat_beta) / (cat_size + support_size * cat_beta))
                 
                 log_p_grid[cat_index] = log_crp_prior + log_likelihood
             
@@ -324,53 +346,78 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         """Calculate the prior probability of a run, based on
         its length and its category
         """
-        cdef list length_list = [float(len(_)) for _ in runs]
-        cdef double l = float(self.l)
+        cdef int run_length, run_idx
+        cdef int num_runs = len(runs)
+        cdef double logp = 0
+        cdef double l = self.l
         
         # length-based prior
         if self.prior_type == 'Poisson':
-            return np.array([log_dpois(_, l) for _ in length_list])#poisson.logpmf(length_list, self.l)
+            for run_idx in xrange(num_runs):
+                run_length = len(runs[run_idx])
+                logp += log_dpois(run_length, l)
         elif self.prior_type == 'Geometric':
-            return np.array([(run_length - 1) * log(1 - l) + log(l) for run_length in length_list])
+            for run_idx in xrange(num_runs):
+                run_length = len(runs[run_idx])
+                logp += (run_length - 1) * log(1 - l) + log(l)
+        return logp
 
     @cython.boundscheck(False) # turn of bounds-checking for entire function
-    def log_cond_prob(self, list obs, cat, dict cat_dict, dict cat_count_dict, beta = None, avoid_cat = None):
+    def log_cond_prob(self, list obs, long cat, dict cat_dict, dict cat_count_dict, double beta = 0, int avoid_cat = 0):
         """Calculate the conditional probability of observations given category and beta.
         """
-        cdef double log_p, prior, likelihood, p, alpha
-        cdef int c, cat_N, num_bundles, support_size
-        cdef np.ndarray[np.int_t, ndim = 1] cat_n_arr, y_count_arr
+        cdef double log_p, prior, likelihood, p, alpha, cat_beta
+        cdef int c, cat_n, cat_size, num_bundles, support_size, y_idx, y_count
+        cdef np.ndarray[np.int_t, ndim = 1] y_count_arr
 
         alpha = self.alpha; num_bundles = len(self.categories)
         support_size = self.support_size
+        cdef np.ndarray support = self.support
         
         log_p = 0
-        y_count_arr = np.array([obs.count(y) for y in self.support])
+        y_count_arr = np.empty(support_size, np.int)
+        for y_idx in xrange(support_size):
+            y_count_arr[y_idx] = obs.count(support[y_idx])
+            
 
-        if cat is not None:
-            try: cat_N = len(cat_dict[cat])
-            except KeyError: cat_N = 0
-            cat_n_arr = np.array([cat_count_dict[cat][y] if cat in cat_count_dict and y in cat_count_dict[cat] else 0 for y in self.support])
-            log_p += (y_count_arr * np.log((cat_n_arr + beta) / (cat_N + support_size * beta))).sum()
+        if cat:
+            if cat in cat_dict: cat_size = len(cat_dict[cat])
+            else: cat_size = 0
+            for y_idx in xrange(support_size):
+                if cat in cat_dict and support[y_idx] in cat_count_dict[cat]:
+                    cat_n = cat_count_dict[cat][support[y_idx]]
+                else:
+                    cat_n = 0
+                y_count = y_count_arr[y_idx]
+                log_p += y_count * log((cat_n + beta) / (cat_size + support_size * beta))
 
         else:
-            # If cat is None, then marginalize over all possible categories
+            # If cat is None/0, then marginalize over all possible categories
             # the new bundle can take. This applies both when removing an 
             # existing breakpoint or adding a new breakpoint.
             p = 0
-            for c in cat_dict.keys():
-                if c == avoid_cat: continue
-                cat_N = len(cat_dict[c])
-                # prior 
-                prior = self.categories.count(c) / (num_bundles + alpha)
-                # likelihood
-                cat_n_arr = np.array([cat_count_dict[cat][y] if cat in cat_count_dict and y in cat_count_dict[cat] else 0 for y in self.support])
-                likelihood = (((cat_n_arr + self.beta[c]) / (cat_N + support_size * self.beta[c])) ** y_count_arr).prod()
-                p += prior * likelihood
+            for c in cat_dict.iterkeys():
+                if c != avoid_cat: 
+                    cat_beta = self.beta[c]
+                    cat_size = len(cat_dict[c])
+                    # prior 
+                    prior = self.categories.count(c) / (num_bundles + alpha)
+                    # likelihood
+                    likelihood = 1
+                    for y_idx in xrange(support_size):
+                        if support[y_idx] in cat_count_dict[c]:
+                            cat_n = cat_count_dict[c][support[y_idx]]
+                        else:
+                            cat_n = 0
+                
+                        likelihood *= pow((cat_n + cat_beta) / (cat_size + support_size * cat_beta), y_count_arr[y_idx])
+                    p += prior * likelihood
                 
             # new category    
             prior = alpha / (num_bundles + alpha)
-            likelihood = ((1 / support_size) ** y_count_arr).prod()
+            likelihood = 1
+            for y_idx in xrange(support_size):
+                likelihood *= (1 / support_size) ** y_count_arr[y_idx]
             p += prior * likelihood
 
             # convert to log
@@ -430,7 +477,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         """Calculate the joint probability of an HGPMM model structure and 
         data.
         """
-        cdef int cat, bundle_length, y_count
+        cdef int cat, bundle_length, y_count, y_idx, cat_size
         cdef double loglik, length_prior_logp, crp_prior_logp, l_logp, l, alpha, total_logp
         cdef list bundles, categories
         cdef dict beta
@@ -442,6 +489,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         cdef dict cat_bundle_count = {}
         cdef int N = 0, i
 
+        cdef np.ndarray support = self.support
+        cdef int support_size = self.support_size
 
         # calculate the logp of l first
         if self.prior_type == 'Poisson':
@@ -474,14 +523,17 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
             # if this is an existing category
             if cat in cat_flat_dict:
-                crp_prior_logp = np.log(cat_bundle_count[cat] / (N + alpha))
+                crp_prior_logp = log(cat_bundle_count[cat] / (N + alpha))
 
                 # loglik
-                for y in self.support:
-                    try: y_count = bundle_counter[y]
-                    except KeyError: y_count = 0
-                    loglik += y_count * np.log(((cat_flat_dict[cat] == y).sum() + beta[cat]) /
-                                               (cat_flat_dict[cat].shape[0] + self.support_size * beta[cat]))
+                cat_size = cat_flat_dict[cat].shape[0]
+                for y_idx in xrange(support_size):
+                    if support[y_idx] in bundle_counter:
+                        y_count = bundle_counter[support[y_idx]]
+                    else: 
+                        y_count = 0
+                    loglik += y_count * log(((cat_flat_dict[cat] == support[y_idx]).sum() + beta[cat]) /
+                                            (cat_size + support_size * beta[cat]))
                 
                 # add this bundle to cluster_dict
                 cat_bundle_count[cat] += 1
@@ -489,13 +541,15 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
             # if this is a new category
             else:
-                crp_prior_logp = np.log(alpha / (N + alpha))
+                crp_prior_logp = log(alpha / (N + alpha))
 
                 # loglik
-                for y in self.support:
-                    try: y_count = bundle_counter[y]
-                    except KeyError: y_count = 0
-                    loglik += y_count * np.log(1 / self.support_size)
+                for y_idx in xrange(support_size):
+                    if support[y_idx] in bundle_counter:
+                        y_count = bundle_counter[support[y_idx]]
+                    else: 
+                        y_count = 0
+                    loglik += y_count * log(1 / support_size)
 
                 # add this category
                 cat_bundle_count[cat] = 1

@@ -234,7 +234,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             
             # get existing categories, novel category, and existing category counts
             try: cat_count, uniq_cats, new_cat = smallest_unused_label(self.categories[:i] + self.categories[i+1:])
-            except IndexError: cat_count, uniq_cats, new_cat = self.smallest_unused_label(self.categories[:i])
+            except IndexError: cat_count, uniq_cats, new_cat = smallest_unused_label(self.categories[:i])
             # set up grid
             cat_grid = list(uniq_cats) + [new_cat]
             log_p_grid = np.empty(len(cat_grid))
@@ -317,7 +317,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 # prior 
                 prior = self.categories.count(c) / (len(self.categories) + self.alpha)
                 # likelihood
-                cat_n_arr = np.array([cat_count_dict[cat][y] if cat in cat_count_dict and y in cat_count_dict[cat] else 0 for y in self.support])
+                cat_n_arr = np.array([cat_count_dict[c][y] if y in cat_count_dict[c] else 0 for y in self.support])
                 likelihood = (((cat_n_arr + self.beta[c]) / (cat_N + self.support_size * self.beta[c])) ** y_count_arr).prod()
                 p += prior * likelihood
                 
