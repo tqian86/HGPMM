@@ -224,17 +224,20 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         bundle_count = len(self.bundles)
         for i in xrange(bundle_count):
             # get all the observations in this bundle
-            try: bundle_obs = list(self.data[self.bundles[i]:self.bundles[i+1]])
-            except IndexError: bundle_obs = list(self.data[self.bundles[i]:])
+            # get existing categories, novel category, and existing category counts
+            if i < bundle_count - 1: 
+                bundle_obs = list(self.data[self.bundles[i]:self.bundles[i+1]])
+                cat_count, uniq_cats, new_cat = smallest_unused_label(self.categories[:i] + self.categories[i+1:])
+            else: 
+                bundle_obs = list(self.data[self.bundles[i]:])
+                cat_count, uniq_cats, new_cat = smallest_unused_label(self.categories[:i])
+            
             # count each support dim
             y_count_arr = np.array([bundle_obs.count(y) for y in self.support])
 
             # get a category - observations dict
             cat_dict = self.get_category_flat_dict(avoid = i)
             
-            # get existing categories, novel category, and existing category counts
-            try: cat_count, uniq_cats, new_cat = smallest_unused_label(self.categories[:i] + self.categories[i+1:])
-            except IndexError: cat_count, uniq_cats, new_cat = smallest_unused_label(self.categories[:i])
             # set up grid
             cat_grid = list(uniq_cats) + [new_cat]
             log_p_grid = np.empty(len(cat_grid))
