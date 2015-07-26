@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+# cython: profile=True
 
 from __future__ import print_function, division
 cimport cython
@@ -10,6 +11,8 @@ from scipy.stats import beta as beta_dist
 from time import time
 from collections import Counter
 import bisect, gzip, random, math, sys
+from array import array
+from cpython cimport array as c_array
 
 from libc.math cimport log, lgamma, pow
 
@@ -42,13 +45,14 @@ def smallest_unused_label(list int_labels):
 
 class SlimNumberedSegmentationSampler(BaseSampler):
 
-    def __init__(self, sample_size = 1000, cl_mode = False, double ialpha = 1, double ibeta=1, cutoff=None, annealing=False,
+    def __init__(self, int sample_size = 1000, cl_mode = False, double ialpha = 1, double ibeta=1, cutoff=None, annealing=False,
                  output_to_stdout = False, record_best = False, debug_mumble = False,
                  sample_alpha = True, sample_beta = True, use_context = False,
-                 prior_type = 'Poisson', double poisson_prior_shape = 1, double poisson_prior_rate = 1,
+                 str prior_type = 'Poisson', double poisson_prior_shape = 1, double poisson_prior_rate = 1,
                  double geom_prior_alpha = 1, double geom_prior_beta = 1):
         """Initialize the sampler.
         """
+        print('here')
         BaseSampler.__init__(self,
                              cl_mode = cl_mode,
                              sample_size = sample_size,
@@ -101,6 +105,9 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             self.data = np.ravel(self.data, order='C')
             self.support = np.unique(self.original_data['pos'])
             self.support_size = len(self.support)
+
+        cdef c_array.array y_count_arr = array('i', [0] * self.support_size)
+        self.y_count_arr = y_count_arr
             
     #@cython.boundscheck(False) # turn of bounds-checking for entire function
     def batch_sample_bundles(self):
@@ -112,13 +119,17 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         cdef list grid, categories, bundles, log_p_grid
         cdef dict cat_dict, cat_count_dict
 
+        cdef np.ndarray data = self.data
         bundles = self.bundles
         categories = self.categories
         N = self.N
+
+        cdef int num_bundles
         
         # we index the sequence of observations using "nth"
         _, _, new_cat = smallest_unused_label(categories)
         for nth in xrange(1, N):
+            num_bundles = len(bundles)
             if nth in bundles:
                 
                 original_idx = bundles.index(nth)
@@ -127,13 +138,15 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 # get the left run
                 left_run_cat = categories[original_idx-1]
                 left_run_beta = self.beta[left_run_cat]
-                left_run = list(self.data[bundles[original_idx-1]:bundles[original_idx]])
+                left_run = list(data[bundles[original_idx-1]:bundles[original_idx]])
 
                 # get the right run
                 right_run_cat = categories[original_idx]
                 right_run_beta = self.beta[right_run_cat]
-                try: right_run = list(self.data[bundles[original_idx]:bundles[original_idx+1]])
-                except: right_run = list(self.data[bundles[original_idx]:])
+                if original_idx < num_bundles - 1:
+                    right_run = list(data[bundles[original_idx]:bundles[original_idx+1]])
+                else:
+                    right_run = list(data[bundles[original_idx]:])
                 
                 together_beta = left_run_beta
 
@@ -167,7 +180,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             
             # compute the likelihood of each case
             if right_run_cat:
-                if original_idx == len(bundles) - 1: next_run_cat = 0
+                if original_idx == num_bundles - 1: next_run_cat = 0
                 else: next_run_cat = categories[original_idx + 1]
                 log_p_grid[0] += self.log_cond_prob(obs = left_run + right_run, cat = left_run_cat,
                                                     cat_dict = cat_dict, cat_count_dict = cat_count_dict,
@@ -232,7 +245,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             log_g_new += lgamma(support_size * new_beta) - lgamma(support_size * new_beta + cat_size)
 
             for y_idx in xrange(support_size):
-                y_count = (cat_dict[cat] == support[y_idx]).sum()
+                y_count = cat_dict[cat].count(support[y_idx])
                 log_g_old += lgamma(y_count + old_beta) - lgamma(old_beta)
                 log_g_new += lgamma(y_count + new_beta) - lgamma(new_beta)
 
@@ -278,7 +291,8 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         categories = self.categories
 
         bundle_count = len(self.bundles)
-        cdef np.ndarray[np.int_t, ndim = 1] y_count_arr = np.empty(support_size, np.int)
+        #cdef np.ndarray[np.int_t, ndim = 1] y_count_arr = np.empty(support_size, np.int)
+        cdef c_array.array y_count_arr = self.y_count_arr
         cdef np.ndarray[np.float_t, ndim = 1] log_p_grid 
         
 
@@ -308,11 +322,11 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                     log_likelihood = len(bundle_obs) * log(1 / support_size)
                 else:
                     cat_beta = self.beta[cat]
-                    cat_size = cat_dict[cat].shape[0]
+                    cat_size = len(cat_dict[cat])
                     log_crp_prior = log(cat_count[cat])
                     log_likelihood = 0
                     for y_idx in xrange(support_size):
-                        cat_n = (cat_dict[cat] == support[y_idx]).sum()
+                        cat_n = cat_dict[cat].count(support[y_idx])
                         log_likelihood += y_count_arr[y_idx] * log((cat_n + cat_beta) / (cat_size + support_size * cat_beta))
                 
                 log_p_grid[cat_index] = log_crp_prior + log_likelihood
@@ -368,14 +382,16 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         """
         cdef double log_p, prior, likelihood, p, alpha, cat_beta
         cdef int c, cat_n, cat_size, num_bundles, support_size, y_idx, y_count
-        cdef np.ndarray[np.int_t, ndim = 1] y_count_arr
+        #cdef np.ndarray[np.int_t, ndim = 1] y_count_arr
+        #cdef c_array.array y_count_arr
+        cdef c_array.array y_count_arr = self.y_count_arr
 
         alpha = self.alpha; num_bundles = len(self.categories)
         support_size = self.support_size
         cdef np.ndarray support = self.support
         
         log_p = 0
-        y_count_arr = np.empty(support_size, np.int)
+        #y_count_arr = np.empty(support_size, np.int)
         for y_idx in xrange(support_size):
             y_count_arr[y_idx] = obs.count(support[y_idx])
             
@@ -426,17 +442,25 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         return log_p
 
     @cython.boundscheck(False) # turn of bounds-checking for entire function
-    def get_surround_runs(self, list bps, int target_bp, data=None):
+    def get_surround_runs(self, list bps, int target_bp):
         """Returns the left and right runs of a target point.
         """
         cdef list left_run, right_run
-        if data is None: data = self.data
-        cdef int anchor = bisect.bisect(bps, target_bp)
+        cdef np.ndarray data = self.data
+        cdef int anchor, bp_idx = 0
+        cdef int num_bps = len(bps)
 
-        try: left_run = list(data[bps[anchor-1]:target_bp])
-        except: left_run = []
+        while bp_idx < num_bps and bps[bp_idx] < target_bp:
+            bp_idx += 1
+        anchor = bp_idx
 
-        if anchor == len(bps):
+        #anchor = bisect.bisect(bps, target_bp)
+        if anchor == 0:
+            left_run = []
+        else:
+            left_run = list(data[bps[anchor-1]:target_bp])
+
+        if anchor == num_bps:
             right_run = list(data[target_bp:])
         else:
             right_run = list(data[target_bp:bps[anchor]])
@@ -444,13 +468,13 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         return left_run, right_run
 
     @cython.boundscheck(False) # turn of bounds-checking for entire function    
-    def get_category_flat_dict(self, avoid=None, bundles=None, categories=None, data=None):
+    def get_category_flat_dict(self, avoid=None, bundles=None, categories=None):
         """Returns category-indexed obs.
         """
         cdef int i
-        cdef np.ndarray run
+        cdef list run
+        cdef np.ndarray data = self.data
         
-        if data is None: data = self.data
         if bundles is None: bundles = self.bundles
         if categories is None: categories = self.categories
 
@@ -463,12 +487,12 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 if i == avoid: continue
 
             if i == num_bundles - 1:
-                run = data[bundles[i]:]
+                run = list(data[bundles[i]:])
             else:
-                run = data[bundles[i]:bundles[i+1]]
+                run = list(data[bundles[i]:bundles[i+1]])
 
             if categories[i] in cat_flat_dict:
-                cat_flat_dict[categories[i]] = np.hstack((cat_flat_dict[categories[i]], run))
+                cat_flat_dict[categories[i]] = cat_flat_dict[categories[i]] + run
             else:
                 cat_flat_dict[categories[i]] = run
         return cat_flat_dict
@@ -487,7 +511,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
         cdef dict cat_flat_dict = {}
         cdef dict cat_bundle_count = {}
-        cdef int N = 0, i
+        cdef int N = 0, i, total_N = self.N
 
         cdef np.ndarray support = self.support
         cdef int support_size = self.support_size
@@ -500,10 +524,12 @@ class SlimNumberedSegmentationSampler(BaseSampler):
 
         total_logp = l_logp
 
-        for i in xrange(len(bundles)):
+        cdef int num_bundles = len(bundles)
+
+        for i in xrange(num_bundles):
                         
-            if i == len(bundles) - 1:
-                bundle_length = len(self.data) - bundles[i]
+            if i == num_bundles - 1:
+                bundle_length = total_N - int(bundles[i])
                 bundle_data = self.data[bundles[i]:]
             else:
                 bundle_length = bundles[i+1] - bundles[i]
@@ -629,13 +655,17 @@ class SlimNumberedSegmentationSampler(BaseSampler):
     def print_samples(self, iteration, dest):
         """Print some debug information.
         """
-        output = '{0},{1},{2},{3},'.format(iteration, self.loglik, self.alpha, self.l)
+        cdef str output = '{0},{1},{2},{3},'.format(iteration, self.loglik, self.alpha, self.l)
 
         # display category information
-        cat_seq = []
-        for i in xrange(len(self.bundles)):
-            try: cat_seq.extend([self.categories[i]] * (self.bundles[i+1] - self.bundles[i]))
-            except IndexError: cat_seq.extend([self.categories[i]] * (self.N - self.bundles[i]))
+        cdef list cat_seq = []
+        cdef int i, num_bundles = len(self.bundles), N = self.N
+        cdef list bundles = self.bundles
+        for i in xrange(num_bundles):
+            if i < num_bundles - 1:
+                cat_seq.extend([self.categories[i]] * (bundles[i+1] - bundles[i]))
+            else:
+                cat_seq.extend([self.categories[i]] * (N - bundles[i]))
         output += ','.join([str(c) for c in cat_seq])
         print(output, file = dest)
 
