@@ -692,14 +692,14 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         # case 1: bundle continues
         old_cat = categories[-1]
         for i in xrange(self.support_size):
-            p[i] += p_b_cont * ((cat_flat_dict[old_cat] == self.support[i]).sum() + beta[old_cat]) / (cat_flat_dict[old_cat].shape[0] + self.support_size * beta[old_cat])
+            p[i] += p_b_cont * ((cat_flat_dict[old_cat] == self.support[i]).sum() + beta[old_cat]) / (len(cat_flat_dict[old_cat]) + self.support_size * beta[old_cat])
         # case 2: new bundle
         for cat in cat_flat_dict.iterkeys():
             if cat == old_cat: continue
             crp_prior_p = categories.count(cat) / (len(categories) + alpha)
             # loglik
             for i in xrange(self.support_size):
-                likelihood = ((cat_flat_dict[cat] == self.support[i]).sum() + beta[cat]) / (cat_flat_dict[cat].shape[0] + self.support_size * beta[cat])
+                likelihood = ((cat_flat_dict[cat] == self.support[i]).sum() + beta[cat]) / (len(cat_flat_dict[cat]) + self.support_size * beta[cat])
                 p[i] += p_b_new * crp_prior_p * likelihood
             
         # if this is a new category
