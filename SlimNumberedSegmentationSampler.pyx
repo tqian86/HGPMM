@@ -13,6 +13,7 @@ from collections import Counter
 import bisect, gzip, random, math, sys
 from array import array
 from cpython cimport array as c_array
+from libc.stdlib cimport rand, RAND_MAX
 
 from libc.math cimport log, lgamma, pow, exp
 
@@ -49,6 +50,32 @@ cdef np.ndarray[np.float_t, ndim=1] lognormalize(np.ndarray[np.float_t, ndim=1] 
 
     return x
  
+@cython.boundscheck(False)
+cdef sample(a, np.ndarray[np.float_t, ndim = 1] p):
+    """Step sample from a discrete distribution using CDF
+    """
+    if (len(a) != len(p)):
+        raise Exception('a != p')
+
+    cdef double p_sum = 0
+    cdef int i, p_length = len(p)
+
+    for i in xrange(p_length):
+        p_sum += p[i]
+
+    for i in xrange(p_length):
+        p[i] = p[i] /  p_sum
+
+    cdef double r = rand() / RAND_MAX #random.random()
+    cdef double total = 0           # range: [0,1]
+
+
+    for i in xrange(p_length):
+        total += p[i]
+        if total > r:
+            return a[i]
+    return a[p_length - 1]
+
 def smallest_unused_label(list int_labels):
     
     if len(int_labels) == 0: return np.array([]), np.array([]), 1
