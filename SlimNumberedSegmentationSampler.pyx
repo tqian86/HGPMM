@@ -4,7 +4,7 @@
 
 from __future__ import print_function, division
 cimport cython
-from clsampler import BaseSampler, sample, lognormalize
+from clsampler import *
 import numpy as np; cimport numpy as np
 from scipy.stats import poisson, gamma
 from scipy.stats import beta as beta_dist
@@ -14,7 +14,7 @@ import bisect, gzip, random, math, sys
 from array import array
 from cpython cimport array as c_array
 
-from libc.math cimport log, lgamma, pow
+from libc.math cimport log, lgamma, pow, exp
 
 cdef double log_dpois(double y, double rate):
     return -rate + y * log(rate) - lgamma(y+1)
@@ -29,6 +29,26 @@ cdef long count(list l, x):
          if l[l_idx] == x: n += 1
      return n
 
+@cython.boundscheck(False)
+cdef np.ndarray[np.float_t, ndim=1] lognormalize(np.ndarray[np.float_t, ndim=1] x, double temp = 1):
+    """Normalize a vector of logprobabilities to probabilities that sum up to 1.
+    Optionally accepts an annealing temperature that does simple annealing.
+    """
+    cdef int i, x_length = x.shape[0]
+    cdef double x_max, x_sum = 0
+    for i in xrange(x_length):
+        if i == 0: x_max = x[i]
+        elif x[i] > x_max: x_max = x[i]
+
+    for i in xrange(x_length):
+        x[i] = pow(exp(x[i] - x_max), temp)
+        x_sum += x[i]
+
+    for i in xrange(x_length):
+        x[i] /= x_sum
+
+    return x
+ 
 def smallest_unused_label(list int_labels):
     
     if len(int_labels) == 0: return np.array([]), np.array([]), 1
@@ -109,17 +129,17 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         cdef c_array.array y_count_arr = array('i', [0] * self.support_size)
         self.y_count_arr = y_count_arr
             
-    #@cython.boundscheck(False) # turn of bounds-checking for entire function
+    @cython.boundscheck(False) # turn of bounds-checking for entire function
     def batch_sample_bundles(self):
         """Perform Gibbs sampling on clusters.
         """
         cdef int nth, left_run_cat, right_run_cat, original_idx, would_be_idx, outcome, c, N
         cdef double left_run_beta, right_run_beta, together_beta, a_time
         cdef list left_run, right_run
-        cdef list grid, categories, bundles, log_p_grid
+        cdef list grid, categories, bundles
         cdef dict cat_dict, cat_count_dict
 
-        cdef np.ndarray data = self.data
+        cdef np.ndarray data = self.data, log_p_grid
         bundles = self.bundles
         categories = self.categories
         N = self.N
@@ -167,7 +187,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                 
             # set up the grid
             grid = [0, 1]
-            log_p_grid = [0, 0]
+            log_p_grid = np.empty(len(grid))
 
             # pre-count
             cat_count_dict = {}
