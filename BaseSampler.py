@@ -60,7 +60,7 @@ def log_dnbinom(y, alpha, beta):
 class BaseSampler:
 
     def __init__(self, data_file, sample_size=5000, cutoff=None, annealing=False,
-                 output_to_stdout = False, record_best=True, debug_mumble = False):
+                 output_to_stdout = False, search=True, debug_mumble = False):
         
         self.data = []
         self._import_data(data_file)
@@ -78,7 +78,7 @@ class BaseSampler:
         self.output_to_stdout = output_to_stdout
         self.annealing = annealing in ['True', 'T', True]
         self.best_sample = (None, None) # (sample, loglikelihood)
-        self.record_best = record_best
+        self.search = search
         self.best_diff = []
         self.no_improv = 0
         self.debug_mumble = debug_mumble

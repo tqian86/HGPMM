@@ -93,7 +93,7 @@ def smallest_unused_label(list int_labels):
 class SlimNumberedSegmentationSampler(BaseSampler):
 
     def __init__(self, int sample_size = 1000, cl_mode = False, double ialpha = 1, double ibeta=1, cutoff=None, annealing=False,
-                 output_to_stdout = False, record_best = False, debug_mumble = False,
+                 output_to_stdout = False, search = False, debug_mumble = False,
                  sample_alpha = True, sample_beta = True, use_context = False,
                  str prior_type = 'Poisson', double poisson_prior_shape = 1, double poisson_prior_rate = 1,
                  double geom_prior_alpha = 1, double geom_prior_beta = 1):
@@ -106,7 +106,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                              cutoff = cutoff,
                              annealing = annealing,
                              output_to_stdout = output_to_stdout,
-                             record_best = record_best,
+                             search = search,
                              debug_mumble = debug_mumble)
         # other shared parameters
         self.prior_type = prior_type
@@ -668,7 +668,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
             if self.sample_alpha: self.batch_sample_alpha()
             if self.sample_beta: self.batch_sample_beta()
 
-            if self.record_best:
+            if self.search:
                 if self.auto_save_sample((self.bundles, self.categories, self.l, self.alpha, self.beta)):
                     # save the samples to files
                     self.loglik = self.best_sample[1]
@@ -685,7 +685,7 @@ class SlimNumberedSegmentationSampler(BaseSampler):
                     print(*[self.cutoff, self.iteration, cat, self.beta[cat]], sep=',', file=beta_fp)
 
         # write out predictions
-        if self.record_best:
+        if self.search:
             predicted = self.predict(self.best_sample[0])
             print(*['t', 'pos', 'probability'], sep=',', file=predict_fp)
             for i in xrange(self.support_size):

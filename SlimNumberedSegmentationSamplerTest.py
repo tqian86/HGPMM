@@ -43,7 +43,7 @@ def run():
                                               geom_prior_alpha = args.gpa,
                                               geom_prior_beta = args.gpb,
                                               output_to_stdout = args.output_to_stdout,
-                                              record_best = args.search,
+                                              search = args.search,
                                               debug_mumble = args.mumble)
     sampler.read_csv(args.data)
     
