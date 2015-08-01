@@ -30,52 +30,6 @@ cdef long count(list l, x):
          if l[l_idx] == x: n += 1
      return n
 
-@cython.boundscheck(False)
-cdef np.ndarray[np.float_t, ndim=1] lognormalize(np.ndarray[np.float_t, ndim=1] x, double temp = 1):
-    """Normalize a vector of logprobabilities to probabilities that sum up to 1.
-    Optionally accepts an annealing temperature that does simple annealing.
-    """
-    cdef int i, x_length = x.shape[0]
-    cdef double x_max, x_sum = 0
-    for i in xrange(x_length):
-        if i == 0: x_max = x[i]
-        elif x[i] > x_max: x_max = x[i]
-
-    for i in xrange(x_length):
-        x[i] = pow(exp(x[i] - x_max), temp)
-        x_sum += x[i]
-
-    for i in xrange(x_length):
-        x[i] /= x_sum
-
-    return x
- 
-@cython.boundscheck(False)
-cdef sample(a, np.ndarray[np.float_t, ndim = 1] p):
-    """Step sample from a discrete distribution using CDF
-    """
-    if (len(a) != len(p)):
-        raise Exception('a != p')
-
-    cdef double p_sum = 0
-    cdef int i, p_length = len(p)
-
-    for i in xrange(p_length):
-        p_sum += p[i]
-
-    for i in xrange(p_length):
-        p[i] = p[i] /  p_sum
-
-    cdef double r = rand() / RAND_MAX #random.random()
-    cdef double total = 0           # range: [0,1]
-
-
-    for i in xrange(p_length):
-        total += p[i]
-        if total > r:
-            return a[i]
-    return a[p_length - 1]
-
 def smallest_unused_label(list int_labels):
     
     if len(int_labels) == 0: return np.array([]), np.array([]), 1
@@ -739,14 +693,14 @@ class SlimNumberedSegmentationSampler(BaseSampler):
         # case 1: bundle continues
         old_cat = categories[-1]
         for i in xrange(self.support_size):
-            p[i] += p_b_cont * ((cat_flat_dict[old_cat] == self.support[i]).sum() + beta[old_cat]) / (len(cat_flat_dict[old_cat]) + self.support_size * beta[old_cat])
+            p[i] += p_b_cont * (cat_flat_dict[old_cat].count(self.support[i]) + beta[old_cat]) / (len(cat_flat_dict[old_cat]) + self.support_size * beta[old_cat])
         # case 2: new bundle
         for cat in cat_flat_dict.iterkeys():
             if cat == old_cat: continue
             crp_prior_p = categories.count(cat) / (len(categories) + alpha)
             # loglik
             for i in xrange(self.support_size):
-                likelihood = ((cat_flat_dict[cat] == self.support[i]).sum() + beta[cat]) / (len(cat_flat_dict[cat]) + self.support_size * beta[cat])
+                likelihood = (cat_flat_dict[cat].count(self.support[i]) + beta[cat]) / (len(cat_flat_dict[cat]) + self.support_size * beta[cat])
                 p[i] += p_b_new * crp_prior_p * likelihood
             
         # if this is a new category
